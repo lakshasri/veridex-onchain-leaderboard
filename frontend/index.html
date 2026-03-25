@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veridex - On-Chain Leaderboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header & Wallet Connectivity -->
+        <header>
+            <h1>Veridex Leaderboard</h1>
+            <button id="connectWalletBtn">Connect Wallet</button>
+            <span id="walletAddressDisplay">Not connected</span>
+            <span id="roleBadge"></span>
+        </header>
+
+        <main>
+            <!-- Organizer Dashboard -->
+            <section id="organizerPanel" class="hidden">
+                <h2>Organizer Controls</h2>
+                <!-- Inputs for registration and assignment go here -->
+                <button id="finalizeBtn" disabled>Finalize Contest</button>
+            </section>
+
+            <!-- Judge Dashboard -->
+            <section id="judgePanel" class="hidden">
+                <h2>Judge Dashboard</h2>
+                <!-- Assigned participants and scoring sliders go here -->
+            </section>
+
+            <!-- Public Leaderboard -->
+            <section id="leaderboardPanel">
+                <h2>Live Leaderboard</h2>
+                <div id="statusIndicator">Status: Pending Finalization</div>
+                <table id="leaderboardTable">
+                    <!-- Leaderboard entries go here -->
+                </table>
+            </section>
+        </main>
+        
+        <!-- Score Breakdown Modal -->
+        <div id="scoreModal" class="hidden modal">
+            <!-- Modal breakdown content goes here -->
+        </div>
+    </div>
+
+    <!-- Ethers.js Dependency -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    <!-- Project Scripts -->
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+/* Base Resets & Layout */
+body {
+    margin: 0;
+    padding: 20px;
+    font-family: Arial, sans-serif;
+}
+
+/* Role Panels & Component Visibility */
+.hidden {
+    display: none !important;
+}
+
+/* Header & Status */
+#roleBadge {
+    font-weight: bold;
+}
+
+/* Leaderboard Table */
+#leaderboardTable {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+/* Score Breakdown Modal */
+.modal {
+    /* Modal layout styling */
+}
+
+/* Error Alerts/Toasts */
+.toast-error {
+    color: red;
+}
