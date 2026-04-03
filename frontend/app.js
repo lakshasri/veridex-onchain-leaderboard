@@ -12,6 +12,7 @@ let currentRole = 'Public';
 let contractWeights = { ps: 40, cq: 30, eff: 30 };
 let currentScoringParticipant = null;
 let judgeListCache = [];
+let isContestFinalized = false;
 
 // ============================================================
 //  WEB3 CONNECTION
@@ -37,7 +38,16 @@ async function connectWallet() {
         await detectRole();
         await updateUIPanels();
 
-        window.ethereum.on('accountsChanged', async () => {
+        window.ethereum.on('accountsChanged', async (accounts) => {
+            if (!accounts.length) {
+                // MetaMask locked / disconnected
+                document.getElementById('walletAddressDisplay').textContent = 'Not connected';
+                document.getElementById('connectWalletBtn').textContent = 'Connect Wallet';
+                document.getElementById('connectWalletBtn').disabled = false;
+                document.getElementById('roleBadge').classList.add('hidden');
+                currentRole = 'Public';
+                return;
+            }
             showToast('Wallet switched — reloading role.', 'info');
             provider = new ethers.providers.Web3Provider(window.ethereum);
             signer = provider.getSigner();
@@ -68,10 +78,13 @@ async function initContract() {
             cq: cq.toNumber(),
             eff: eff.toNumber()
         };
-        // Update weight hints in scoring modal
+        // Update weight hints in scoring modal and leaderboard headers
         document.getElementById('wPS').textContent = `(weight: ${contractWeights.ps}%)`;
         document.getElementById('wCQ').textContent = `(weight: ${contractWeights.cq}%)`;
         document.getElementById('wEff').textContent = `(weight: ${contractWeights.eff}%)`;
+        document.getElementById('colPS').textContent  = `Prob. Solving (${contractWeights.ps}%)`;
+        document.getElementById('colCQ').textContent  = `Code Quality (${contractWeights.cq}%)`;
+        document.getElementById('colEff').textContent = `Efficiency (${contractWeights.eff}%)`;
     } catch (_) {}
 
     // Real-time event listeners
@@ -103,14 +116,7 @@ async function initContract() {
 async function detectRole() {
     if (!contract || !userAddress) return;
     try {
-        const organizer = await contract.organizer();
-        if (organizer.toLowerCase() === userAddress.toLowerCase()) {
-            currentRole = 'Organizer';
-            setBadge('Organizer', 'badge-organizer');
-            return;
-        }
-
-        // Rebuild judgeList cache
+        // Always rebuild judgeListCache — needed by breakdown modal for all roles
         judgeListCache = [];
         let i = 0;
         while (true) {
@@ -119,6 +125,13 @@ async function detectRole() {
                 judgeListCache.push(addr.toLowerCase());
                 i++;
             } catch (_) { break; }
+        }
+
+        const organizer = await contract.organizer();
+        if (organizer.toLowerCase() === userAddress.toLowerCase()) {
+            currentRole = 'Organizer';
+            setBadge('Organizer', 'badge-organizer');
+            return;
         }
 
         if (judgeListCache.includes(userAddress.toLowerCase())) {
@@ -163,6 +176,9 @@ async function handleRegisterParticipant() {
     const addr = document.getElementById('regParticipantAddr').value.trim();
     const name = document.getElementById('regParticipantName').value.trim();
     if (!addr || !name) { showToast('Please fill in both address and name.', 'error'); return; }
+    if (!ethers.utils.isAddress(addr)) { showToast('Invalid Ethereum address.', 'error'); return; }
+    const btn = event.currentTarget;
+    setLoading(btn, true);
     try {
         const tx = await contract.registerParticipant(addr, name);
         showToast('Transaction sent — waiting for confirmation...', 'info');
@@ -173,6 +189,8 @@ async function handleRegisterParticipant() {
         await refreshContestInfoBar();
     } catch (err) {
         showToast(parseError(err), 'error');
+    } finally {
+        setLoading(btn, false);
     }
 }
 
@@ -180,6 +198,9 @@ async function handleRegisterJudge() {
     const addr = document.getElementById('regJudgeAddr').value.trim();
     const name = document.getElementById('regJudgeName').value.trim();
     if (!addr || !name) { showToast('Please fill in both address and name.', 'error'); return; }
+    if (!ethers.utils.isAddress(addr)) { showToast('Invalid Ethereum address.', 'error'); return; }
+    const btn = event.currentTarget;
+    setLoading(btn, true);
     try {
         const tx = await contract.registerJudge(addr, name);
         showToast('Transaction sent — waiting for confirmation...', 'info');
@@ -191,6 +212,8 @@ async function handleRegisterJudge() {
         await updateJudgeProgress();
     } catch (err) {
         showToast(parseError(err), 'error');
+    } finally {
+        setLoading(btn, false);
     }
 }
 
@@ -198,8 +221,13 @@ async function handleAssignParticipants() {
     const judgeAddr = document.getElementById('assignJudgeAddr').value.trim();
     const raw = document.getElementById('assignParticipantAddrs').value.trim();
     if (!judgeAddr || !raw) { showToast('Please fill in judge address and participant addresses.', 'error'); return; }
+    if (!ethers.utils.isAddress(judgeAddr)) { showToast('Invalid judge address.', 'error'); return; }
     const participantAddrs = raw.split(',').map(a => a.trim()).filter(a => a.length > 0);
     if (participantAddrs.length === 0) { showToast('No valid participant addresses found.', 'error'); return; }
+    const invalidAddr = participantAddrs.find(a => !ethers.utils.isAddress(a));
+    if (invalidAddr) { showToast(`Invalid address: ${shortAddr(invalidAddr) || invalidAddr}`, 'error'); return; }
+    const btn = event.currentTarget;
+    setLoading(btn, true);
     try {
         const tx = await contract.assignParticipantsToJudge(judgeAddr, participantAddrs);
         showToast('Transaction sent — waiting for confirmation...', 'info');
@@ -211,19 +239,25 @@ async function handleAssignParticipants() {
         await refreshContestInfoBar();
     } catch (err) {
         showToast(parseError(err), 'error');
+    } finally {
+        setLoading(btn, false);
     }
 }
 
 async function handleFinalizeContest() {
+    const btn = document.getElementById('finalizeBtn');
+    setLoading(btn, true);
     try {
         const tx = await contract.finalizeResults();
         showToast('Finalization transaction sent...', 'info');
         await tx.wait();
         showToast('Contest finalized! Leaderboard is now permanently locked.', 'success');
+        lockOrganizerForms();
         await updateUIPanels();
         await fetchAndRenderLeaderboard();
     } catch (err) {
         showToast(parseError(err), 'error');
+        setLoading(btn, false);
     }
 }
 
@@ -231,9 +265,10 @@ async function checkFinalizeEligibility() {
     try {
         const done = await contract.allJudgesCompleted();
         const phaseVal = await contract.phase();
+        const phaseNum = phaseVal.toNumber ? phaseVal.toNumber() : Number(phaseVal);
         const btn = document.getElementById('finalizeBtn');
         const check = document.getElementById('checkAllJudgesDone');
-        if (done && phaseVal < 2) {
+        if (done && phaseNum < 2) {
             btn.disabled = false;
             check.innerHTML = '<span class="check-icon">&#9745;</span> All judges completed';
             check.classList.add('check-done');
@@ -242,6 +277,7 @@ async function checkFinalizeEligibility() {
             check.innerHTML = '<span class="check-icon">&#9744;</span> All judges completed';
             check.classList.remove('check-done');
         }
+        if (phaseNum === 2) lockOrganizerForms();
     } catch (_) {}
 }
 
@@ -414,7 +450,8 @@ async function fetchAndRenderLeaderboard() {
     const tbody = document.getElementById('leaderboardBody');
     try {
         const phaseVal = await contract.phase();
-        const isFinalized = phaseVal === 2 || phaseVal.toNumber?.() === 2;
+        isContestFinalized = phaseVal === 2 || phaseVal.toNumber?.() === 2;
+        const isFinalized = isContestFinalized;
 
         // Update status indicator
         updateStatusIndicator(isFinalized ? 2 : phaseVal.toNumber?.() ?? phaseVal);
@@ -447,8 +484,8 @@ async function fetchAndRenderLeaderboard() {
             }
 
             rows += `
-                <tr class="${rowClass} leaderboard-row"
-                    onclick="isFinalized && openBreakdownModal('${addrs[i]}', '${name}')"
+                <tr class="${rowClass} leaderboard-row${isFinalized ? ' clickable' : ''}"
+                    onclick="if(isContestFinalized) openBreakdownModal('${addrs[i]}', '${name}')"
                     title="${isFinalized ? 'Click to view score breakdown' : ''}">
                     <td class="rank-cell">${rankDisplay}</td>
                     <td class="name-cell">${name}</td>
@@ -566,6 +603,7 @@ async function updateUIPanels() {
     if (currentRole === 'Organizer') {
         document.getElementById('organizerPanel').classList.remove('hidden');
         await updateJudgeProgress();
+        if (isContestFinalized) lockOrganizerForms();
     } else if (currentRole === 'Judge') {
         document.getElementById('judgePanel').classList.remove('hidden');
         await fetchAssignedParticipants();
@@ -609,6 +647,31 @@ function updateStatusIndicator(phase) {
         label.textContent = 'Registration Phase';
         indicator.classList.add('pending');
     }
+}
+
+// ============================================================
+//  ORGANIZER UTILITIES
+// ============================================================
+
+function setLoading(btn, loading) {
+    if (!btn) return;
+    if (loading) {
+        btn.dataset.originalText = btn.textContent;
+        btn.textContent = 'Pending...';
+        btn.disabled = true;
+    } else {
+        btn.textContent = btn.dataset.originalText || btn.textContent;
+        btn.disabled = false;
+    }
+}
+
+function lockOrganizerForms() {
+    const panel = document.getElementById('organizerPanel');
+    if (!panel) return;
+    panel.querySelectorAll('input, textarea, button').forEach(el => {
+        el.disabled = true;
+    });
+    panel.classList.add('panel-locked');
 }
 
 // ============================================================
