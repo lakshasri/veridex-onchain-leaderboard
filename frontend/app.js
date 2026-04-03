@@ -794,6 +794,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
     fetch('contractABI.json')
         .then(res => res.json())
-        .then(abi => { window.contractABI = abi; })
+        .then(abi => {
+            window.contractABI = abi;
+            // Auto-reconnect if MetaMask already has permissions (no popup)
+            if (window.ethereum) {
+                window.ethereum.request({ method: 'eth_accounts' })
+                    .then(accounts => { if (accounts.length > 0) connectWallet(); })
+                    .catch(() => {});
+            }
+        })
         .catch(err => console.error('Could not load ABI:', err));
 });
