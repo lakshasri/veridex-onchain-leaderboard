@@ -487,29 +487,54 @@ async function fetchAndRenderLeaderboard() {
             return;
         }
 
+        // Build sortable array from parallel arrays, then rank by descending average score
+        let participants = addrs.map((addr, i) => ({
+            addr,
+            name: names[i],
+            evalCount: evalCounts[i].toNumber ? evalCounts[i].toNumber() : Number(evalCounts[i]),
+            totalRaw:  totalScores[i].toNumber ? totalScores[i].toNumber() : Number(totalScores[i]),
+        }));
+        participants.sort((a, b) => {
+            const avgA = a.evalCount > 0 ? a.totalRaw / a.evalCount : -1;
+            const avgB = b.evalCount > 0 ? b.totalRaw / b.evalCount : -1;
+            return avgB - avgA;
+        });
+
+        // If finalized, batch-fetch per-criterion sums for each participant
+        const criteriaMap = {};
+        if (isFinalized) {
+            await Promise.all(participants.map(async (p) => {
+                if (p.evalCount > 0) {
+                    const [psSum, cqSum, effSum] = await contract.getParticipantScore(p.addr);
+                    criteriaMap[p.addr] = {
+                        ps:  psSum.toNumber  ? psSum.toNumber()  : Number(psSum),
+                        cq:  cqSum.toNumber  ? cqSum.toNumber()  : Number(cqSum),
+                        eff: effSum.toNumber ? effSum.toNumber() : Number(effSum),
+                    };
+                }
+            }));
+        }
+
         const medals = ['🥇', '🥈', '🥉'];
         let rows = '';
 
-        for (let i = 0; i < addrs.length; i++) {
+        for (let i = 0; i < participants.length; i++) {
             const rank = i + 1;
-            const name = names[i];
-            const evalCount = evalCounts[i].toNumber ? evalCounts[i].toNumber() : Number(evalCounts[i]);
-            const totalRaw = totalScores[i].toNumber ? totalScores[i].toNumber() : Number(totalScores[i]);
+            const { addr, name, evalCount, totalRaw } = participants[i];
             const avgTotal = evalCount > 0 ? (totalRaw / evalCount).toFixed(1) : '—';
             const rankDisplay = rank <= 3 ? `${medals[rank - 1]} ${rank}` : rank;
             const rowClass = rank === 1 ? 'rank-gold' : rank === 2 ? 'rank-silver' : rank === 3 ? 'rank-bronze' : '';
 
             let psCell = '—', cqCell = '—', effCell = '—';
-            if (isFinalized && evalCount > 0) {
-                const [psSum, cqSum, effSum] = await contract.getParticipantScore(addrs[i]);
-                psCell  = (psSum.toNumber()  / evalCount).toFixed(1);
-                cqCell  = (cqSum.toNumber()  / evalCount).toFixed(1);
-                effCell = (effSum.toNumber() / evalCount).toFixed(1);
+            if (isFinalized && evalCount > 0 && criteriaMap[addr]) {
+                psCell  = (criteriaMap[addr].ps  / evalCount).toFixed(1);
+                cqCell  = (criteriaMap[addr].cq  / evalCount).toFixed(1);
+                effCell = (criteriaMap[addr].eff / evalCount).toFixed(1);
             }
 
             rows += `
                 <tr class="${rowClass} leaderboard-row${isFinalized ? ' clickable' : ''}"
-                    onclick="if(isContestFinalized) openBreakdownModal('${addrs[i]}', '${name}')"
+                    onclick="if(isContestFinalized) openBreakdownModal('${addr}', '${name}')"
                     title="${isFinalized ? 'Click to view score breakdown' : ''}">
                     <td class="rank-cell">${rankDisplay}</td>
                     <td class="name-cell">${name}</td>
