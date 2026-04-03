@@ -543,6 +543,32 @@ main {
 
 .progress-fill.done { background: linear-gradient(90deg, #2ea043, var(--success)); }
 
+/* ---- Judge "All Done" Banner ---- */
+.judge-done-banner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 18px 24px;
+    margin-bottom: 20px;
+    background: rgba(63, 185, 80, 0.12);
+    border: 1px solid rgba(63, 185, 80, 0.35);
+    border-radius: var(--radius-lg);
+    text-align: center;
+}
+.judge-done-banner span {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--success);
+    letter-spacing: 0.04em;
+}
+.judge-done-banner small {
+    font-family: var(--font-body);
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
 /* ============================================================
    STATUS INDICATOR
    ============================================================ */

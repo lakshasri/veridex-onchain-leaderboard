@@ -304,6 +304,11 @@ async function fetchAssignedParticipants() {
             const isSubmitted = scoreData.submitted;
             if (isSubmitted) submitted++;
 
+            // When finalized, all rows show View; when already scored, show View; else Score
+            const actionBtn = (isSubmitted || isContestFinalized)
+                ? `<button class="btn btn-ghost btn-sm" onclick="openBreakdownForJudge('${addr}', '${pData.name}')">View</button>`
+                : `<button class="btn btn-primary btn-sm" onclick="openScoreModal('${addr}', '${pData.name}')">Score</button>`;
+
             rows += `
                 <tr class="${isSubmitted ? 'row-scored' : ''}">
                     <td>${i + 1}</td>
@@ -312,9 +317,7 @@ async function fetchAssignedParticipants() {
                     <td>${isSubmitted
                         ? '<span class="badge-submitted">Submitted</span>'
                         : '<span class="badge-pending">Pending</span>'}</td>
-                    <td>${isSubmitted
-                        ? `<button class="btn btn-ghost btn-sm" onclick="openBreakdownForJudge('${addr}', '${pData.name}')">View</button>`
-                        : `<button class="btn btn-primary btn-sm" onclick="openScoreModal('${addr}', '${pData.name}')">Score</button>`}</td>
+                    <td>${actionBtn}</td>
                 </tr>`;
         }
         tbody.innerHTML = rows;
@@ -323,6 +326,18 @@ async function fetchAssignedParticipants() {
         document.getElementById('judgeProgressText').textContent =
             `${submitted} of ${assignedAddrs.length} participants scored`;
         document.getElementById('judgeProgressFill').style.width = pct + '%';
+
+        // "All done!" banner when judge has completed all scoring
+        if (submitted === assignedAddrs.length && !isContestFinalized) {
+            const existing = document.getElementById('judgeDoneBanner');
+            if (!existing) {
+                const banner = document.createElement('div');
+                banner.id = 'judgeDoneBanner';
+                banner.className = 'judge-done-banner';
+                banner.innerHTML = '<span>All participants scored!</span><small>Waiting for organizer to finalize the contest.</small>';
+                document.getElementById('judgePanel').insertBefore(banner, document.querySelector('.card.full-width'));
+            }
+        }
     } catch (err) {
         tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Error loading assignments.</td></tr>';
         console.error(err);
@@ -379,6 +394,12 @@ async function handleSubmitScore() {
         showToast('All scores must be between 0 and 100.', 'error');
         return;
     }
+
+    const submitBtn = document.querySelector('#scoreModal .modal-footer .btn-primary');
+    const modalInputs = document.querySelectorAll('#scoreModal input, #scoreModal .modal-close, #scoreModal .btn-ghost');
+    setLoading(submitBtn, true);
+    modalInputs.forEach(el => el.disabled = true);
+
     try {
         const tx = await contract.submitScore(currentScoringParticipant, ps, cq, eff);
         showToast('Score transaction sent...', 'info');
@@ -389,6 +410,9 @@ async function handleSubmitScore() {
         await fetchAndRenderLeaderboard();
     } catch (err) {
         showToast(parseError(err), 'error');
+    } finally {
+        setLoading(submitBtn, false);
+        modalInputs.forEach(el => el.disabled = false);
     }
 }
 
