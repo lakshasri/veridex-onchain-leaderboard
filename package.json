@@ -1,0 +1,15 @@
+{
+  "name": "veridex-onchain-leaderboard",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "postcompile": "node scripts/copy-abi.js",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.cjs --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0"
+  }
+}
