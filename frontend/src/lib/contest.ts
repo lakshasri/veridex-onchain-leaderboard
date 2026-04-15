@@ -1,7 +1,7 @@
-import { Contract, JsonRpcSigner, type Provider } from "ethers";
+import { Contract, JsonRpcSigner, type InterfaceAbi, type Provider } from "ethers";
 import artifact from "../abi/ContestJudging.json";
 
-export const CONTEST_ABI = artifact.abi as unknown[];
+export const CONTEST_ABI = artifact.abi as InterfaceAbi;
 
 export function contestAt(address: string, runner: Provider | JsonRpcSigner) {
   return new Contract(address, CONTEST_ABI, runner);
