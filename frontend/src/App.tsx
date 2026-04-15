@@ -416,7 +416,9 @@ export default function App() {
 
       <header className="top-bar">
         <div className="brand">
-          <div className="brand-mark">V</div>
+          <div className="brand-mark">
+            <img src="/logo.png" alt="Veridex" />
+          </div>
           <div className="brand-text">
             <h1>Veridex</h1>
             <span>On-chain contest judging</span>
