@@ -145,6 +145,21 @@ export default function App() {
     const onChain = (cid: unknown) => setChainId(Number(cid as string));
     eth.on("accountsChanged", onAccounts);
     eth.on("chainChanged", onChain);
+
+    (async () => {
+      try {
+        const prov = new BrowserProvider(eth);
+        const accs = (await prov.send("eth_accounts", [])) as string[];
+        if (accs.length > 0) {
+          setAccount(accs[0]);
+          const net = await prov.getNetwork();
+          setChainId(Number(net.chainId));
+        }
+      } catch {
+        /* user not connected yet */
+      }
+    })();
+
     return () => {
       eth.removeListener?.("accountsChanged", onAccounts);
       eth.removeListener?.("chainChanged", onChain);
