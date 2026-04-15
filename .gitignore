@@ -1,45 +1,8 @@
-plans/
-
-# ── Node / package managers ───────────────────────────────────────────────────
 node_modules/
-npm-debug.log*
-yarn-error.log*
-.pnp/
-.pnp.js
-
-# ── Environment & secrets ─────────────────────────────────────────────────────
-.env
-.env.local
-.env.*.local
-*.key
-*.pem
-
-# ── Hardhat / Truffle artefacts ───────────────────────────────────────────────
 artifacts/
 cache/
-typechain/
-typechain-types/
-build/
-out/
-
-# ── Remix IDE local cache ─────────────────────────────────────────────────────
-.deps/
-remixd.log
-
-# ── Ganache state snapshot ────────────────────────────────────────────────────
-ganache_db/
-ganache-data/
-
-# ── OS / editor noise ─────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-.vscode/settings.json
-.idea/
-*.swp
-*.swo
-*~
-
-# ── Coverage & test outputs ───────────────────────────────────────────────────
-coverage/
-coverage.json
-lcov.info
+frontend/dist/
+frontend/node_modules/
+.env
+.env.local
+*.log
