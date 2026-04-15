@@ -6,7 +6,8 @@
     "postcompile": "node scripts/copy-abi.js",
     "test": "hardhat test",
     "node": "hardhat node",
-    "deploy:local": "hardhat run scripts/deploy.cjs --network localhost"
+    "deploy:local": "hardhat run scripts/deploy.cjs --network localhost",
+    "smoke:local": "hardhat run scripts/smoke.cjs --network localhost"
   },
   "engines": {
     "node": ">=20.0.0"
