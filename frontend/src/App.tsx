@@ -45,7 +45,7 @@ type AuditEntry =
 function parseChainIds(): number[] {
   const raw = import.meta.env.VITE_CHAIN_IDS;
   if (!raw) return DEFAULT_CHAIN_IDS;
-  return raw.split(",").map((s) => Number(s.trim())).filter(Boolean);
+  return raw.split(",").map((s: string) => Number(s.trim())).filter(Boolean);
 }
 
 function explorerTxUrl(chainId: number, txHash: string): string | null {
