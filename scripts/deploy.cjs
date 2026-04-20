@@ -10,6 +10,9 @@ async function main() {
   const c = await Factory.deploy(max, wPs, wCq, wEf);
   await c.waitForDeployment();
   const addr = await c.getAddress();
+  if (!addr || addr === hre.ethers.ZeroAddress) throw new Error("deployment failed: zero address returned");
+  const onChainOrganizer = await c.organizer();
+  if (onChainOrganizer.toLowerCase() !== deployer.address.toLowerCase()) throw new Error("organizer mismatch after deploy");
   console.log("ContestJudging deployed to", addr);
   console.log("Organizer (deployer):", deployer.address);
 }
