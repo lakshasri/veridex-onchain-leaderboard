@@ -1,6 +1,12 @@
 const hre = require("hardhat");
 
 async function main() {
+  const network = await hre.ethers.provider.getNetwork();
+  const localChainIds = [31337n, 1337n, 5777n];
+  if (!localChainIds.includes(network.chainId)) {
+    throw new Error(`smoke test blocked: expected local chain, got chainId ${network.chainId}`);
+  }
+
   const [organizer, judgeA, judgeB, p1, p2, p3, outsider] = await hre.ethers.getSigners();
 
   const Factory = await hre.ethers.getContractFactory("ContestJudging", organizer);
