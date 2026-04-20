@@ -31,7 +31,7 @@ async function main() {
   const [completed, total] = await c.globalEvaluationProgress();
   console.log(`global progress: ${completed}/${total}`);
 
-  const [addrs, aggs, evals] = await c.leaderboardData();
+  const [addrs, aggs, evals] = await c.leaderboardData(0, 500);
   for (let i = 0; i < addrs.length; i++) {
     const pct = (aggs[i] * 10000n) / 10n ** 18n;
     console.log(

@@ -278,7 +278,7 @@ export default function App() {
       const gp = await ro.globalEvaluationProgress();
       setGlobalProg({ done: BigInt(gp[0].toString()), total: BigInt(gp[1].toString()) });
 
-      const ld = await ro.leaderboardData();
+      const ld = await ro.leaderboardData(0, 500);
       if (!Array.isArray(ld) || ld.length < 3 || !Array.isArray(ld[0]) || !Array.isArray(ld[1]) || !Array.isArray(ld[2])) {
         throw new Error("Unexpected leaderboard data shape from contract.");
       }
@@ -445,7 +445,7 @@ export default function App() {
     setErr(null);
     try {
       const ro = contestAt(activeContract, readProvider);
-      const bd = await ro.participantBreakdown(breakdownPart.trim());
+      const bd = await ro.participantBreakdown(breakdownPart.trim(), 0, 500);
       const judgesOut = bd[0] as string[];
       const flags = bd[1] as boolean[];
       const ps = bd[2] as bigint[];
