@@ -5,6 +5,7 @@ pragma solidity ^0.8.20;
 /// @notice Transparent judging: assignments enforced, immutable submissions, organizer finalization locks state.
 contract ContestJudging {
     address public organizer;
+    address public pendingOrganizer;
     bool public finalized;
 
     /// @dev Maximum raw points per criterion (inclusive).
@@ -47,6 +48,8 @@ contract ContestJudging {
     mapping(address => uint256) private _judgeAssignedSlots;
     mapping(address => uint256) private _judgeCompletedSlots;
 
+    event OrganizerTransferProposed(address indexed proposed);
+    event OrganizerTransferred(address indexed previous, address indexed next);
     event ParticipantRegistered(address indexed participant);
     event JudgeRegistered(address indexed judge);
     event AssignmentUpdated(address indexed judge, address indexed participant, bool allowed);
@@ -61,6 +64,7 @@ contract ContestJudging {
     event Finalized(address indexed organizer, uint256 timestamp);
 
     error NotOrganizer();
+    error NotPendingOrganizer();
     error AlreadyFinalized();
     error NotParticipant();
     error NotJudge();
@@ -93,6 +97,19 @@ contract ContestJudging {
         weightCodeQualityBps = wCqBps;
         weightEfficiencyBps = wEfBps;
         if (wPsBps + wCqBps + wEfBps != 10_000) revert InvalidScore();
+    }
+
+    function proposeOrganizer(address newOrganizer) external onlyOrganizer {
+        if (newOrganizer == address(0)) revert ZeroAddress();
+        pendingOrganizer = newOrganizer;
+        emit OrganizerTransferProposed(newOrganizer);
+    }
+
+    function acceptOrganizer() external {
+        if (msg.sender != pendingOrganizer) revert NotPendingOrganizer();
+        emit OrganizerTransferred(organizer, msg.sender);
+        organizer = msg.sender;
+        pendingOrganizer = address(0);
     }
 
     function participantCount() external view returns (uint256) {
