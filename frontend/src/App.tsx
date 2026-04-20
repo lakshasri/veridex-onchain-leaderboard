@@ -800,6 +800,7 @@ export default function App() {
                     className="btn btn--primary"
                     disabled={busy || finalized}
                     onClick={async () => {
+                      if (!isAddress(regP.trim())) { setErr("Invalid participant address."); return; }
                       const signer = await provider!.getSigner();
                       void runTx(contestAt(activeContract, signer).registerParticipant(regP.trim()));
                     }}
@@ -817,6 +818,7 @@ export default function App() {
                     className="btn btn--primary"
                     disabled={busy || finalized}
                     onClick={async () => {
+                      if (!isAddress(regJ.trim())) { setErr("Invalid judge address."); return; }
                       const signer = await provider!.getSigner();
                       void runTx(contestAt(activeContract, signer).registerJudge(regJ.trim()));
                     }}
