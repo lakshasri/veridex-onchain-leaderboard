@@ -48,6 +48,15 @@ function parseChainIds(): number[] {
   return raw.split(",").map((s: string) => Number(s.trim())).filter(Boolean);
 }
 
+function prettyContractReadError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const low = msg.toLowerCase();
+  if (low.includes("missing revert data") || low.includes("call_exception")) {
+    return "Could not read this contract. Check that the address is deployed on the selected chain and matches ContestJudging.";
+  }
+  return msg;
+}
+
 function explorerTxUrl(chainId: number, txHash: string): string | null {
   const map: Record<number, string> = {
     1: "https://etherscan.io/tx/",
@@ -196,6 +205,29 @@ export default function App() {
     if (!provider || !activeContract || !isAddress(activeContract) || !chainOk) return;
     setErr(null);
     try {
+      const code = await provider.getCode(activeContract);
+      if (!code || code === "0x") {
+        setOrganizer(null);
+        setFinalized(false);
+        setMaxCrit(0);
+        setWeights(null);
+        setParticipants([]);
+        setJudges([]);
+        setGlobalProg({ done: 0n, total: 0n });
+        setJudgeProg({ done: 0n, total: 0n });
+        setJudgeStats([]);
+        setBoard([]);
+        setCanFin(false);
+        setAuditLog([]);
+        setPendingForJudge([]);
+        setBreakdownRows([]);
+        const cid = chainId ?? "unknown";
+        setErr(
+          `No contract is deployed at ${activeContract} on chain ID ${cid}. Deploy with npm run deploy:local and load the printed address.`
+        );
+        return;
+      }
+
       const ro = contestAt(activeContract, provider);
       const [org, fin, mx, wps, wcq, wef, pc, jc] = await Promise.all([
         ro.organizer(),
@@ -338,9 +370,9 @@ export default function App() {
         setAuditLog([]);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(prettyContractReadError(e));
     }
-  }, [provider, activeContract, chainOk, account]);
+  }, [provider, activeContract, chainOk, account, chainId]);
 
   useEffect(() => {
     void refresh();
