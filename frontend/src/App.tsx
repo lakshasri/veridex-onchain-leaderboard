@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrowserProvider, ContractTransactionResponse, EventLog, isAddress } from "ethers";
+import { BrowserProvider, ContractTransactionResponse, EventLog, JsonRpcProvider, isAddress } from "ethers";
 import { contestAt, scaledToPercent100, shortAddr } from "./lib/contest";
 
 const LS_KEY = "veridex_contract_address";
@@ -51,6 +51,9 @@ function parseChainIds(): number[] {
 function prettyContractReadError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   const low = msg.toLowerCase();
+  if (low.includes("-32002") || low.includes("too many errors")) {
+    return "RPC endpoint is temporarily rate-limited. Ensure MetaMask RPC is http://127.0.0.1:8545, switch network away and back, wait 30s, then retry Load.";
+  }
   if (low.includes("missing revert data") || low.includes("call_exception")) {
     return "Could not read this contract. Check that the address is deployed on the selected chain and matches ContestJudging.";
   }
@@ -102,6 +105,7 @@ declare global {
 
 export default function App() {
   const chainIds = useMemo(parseChainIds, []);
+  const rpcUrl = import.meta.env.VITE_RPC_URL || "http://127.0.0.1:8545";
   const [section, setSection] = useState<Section>("overview");
   const [contractAddrInput, setContractAddrInput] = useState(() => localStorage.getItem(LS_KEY) || "");
   const [activeContract, setActiveContract] = useState(() => localStorage.getItem(LS_KEY) || "");
@@ -145,6 +149,7 @@ export default function App() {
     if (!window.ethereum) return null;
     return new BrowserProvider(window.ethereum);
   }, [account]);
+  const readProvider = useMemo(() => new JsonRpcProvider(rpcUrl), [rpcUrl]);
 
   const connectWallet = async () => {
     setErr(null);
@@ -202,10 +207,10 @@ export default function App() {
   };
 
   const refresh = useCallback(async () => {
-    if (!provider || !activeContract || !isAddress(activeContract) || !chainOk) return;
+    if (!activeContract || !isAddress(activeContract) || !chainOk) return;
     setErr(null);
     try {
-      const code = await provider.getCode(activeContract);
+      const code = await readProvider.getCode(activeContract);
       if (!code || code === "0x") {
         setOrganizer(null);
         setFinalized(false);
@@ -228,7 +233,7 @@ export default function App() {
         return;
       }
 
-      const ro = contestAt(activeContract, provider);
+      const ro = contestAt(activeContract, readProvider);
       const [org, fin, mx, wps, wcq, wef, pc, jc] = await Promise.all([
         ro.organizer(),
         ro.finalized(),
@@ -331,7 +336,7 @@ export default function App() {
       }
 
       try {
-        const latest = await provider.getBlockNumber();
+        const latest = await readProvider.getBlockNumber();
         const span = 8000;
         const from = latest > span ? latest - span : 0;
         const [scoreEvs, finEvs] = await Promise.all([
@@ -372,7 +377,7 @@ export default function App() {
     } catch (e) {
       setErr(prettyContractReadError(e));
     }
-  }, [provider, activeContract, chainOk, account, chainId]);
+  }, [readProvider, activeContract, chainOk, account, chainId]);
 
   useEffect(() => {
     void refresh();
@@ -415,13 +420,13 @@ export default function App() {
   };
 
   const loadBreakdown = async () => {
-    if (!provider || !activeContract || !isAddress(breakdownPart)) {
+    if (!activeContract || !isAddress(breakdownPart)) {
       setErr("Enter a valid participant address for breakdown.");
       return;
     }
     setErr(null);
     try {
-      const ro = contestAt(activeContract, provider);
+      const ro = contestAt(activeContract, readProvider);
       const bd = await ro.participantBreakdown(breakdownPart.trim());
       const judgesOut = bd[0] as string[];
       const flags = bd[1] as boolean[];
@@ -439,7 +444,7 @@ export default function App() {
       }));
       setBreakdownRows(rows);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(prettyContractReadError(e));
     }
   };
 
