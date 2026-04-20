@@ -66,6 +66,7 @@ contract ContestJudging {
     error NotOrganizer();
     error NotPendingOrganizer();
     error AlreadyFinalized();
+    error AlreadyRegistered();
     error NotParticipant();
     error NotJudge();
     error NotAssigned();
@@ -130,7 +131,7 @@ contract ContestJudging {
 
     function registerParticipant(address participant) external onlyOrganizer whenNotFinalized {
         if (participant == address(0)) revert ZeroAddress();
-        if (isParticipant[participant]) revert InvalidScore();
+        if (isParticipant[participant]) revert AlreadyRegistered();
         isParticipant[participant] = true;
         _participants.push(participant);
         emit ParticipantRegistered(participant);
@@ -138,7 +139,7 @@ contract ContestJudging {
 
     function registerJudge(address judgeAddr) external onlyOrganizer whenNotFinalized {
         if (judgeAddr == address(0)) revert ZeroAddress();
-        if (isJudge[judgeAddr]) revert InvalidScore();
+        if (isJudge[judgeAddr]) revert AlreadyRegistered();
         isJudge[judgeAddr] = true;
         _judges.push(judgeAddr);
         emit JudgeRegistered(judgeAddr);
