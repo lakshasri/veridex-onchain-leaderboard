@@ -48,16 +48,21 @@ function parseChainIds(): number[] {
   return raw.split(",").map((s: string) => Number(s.trim())).filter(Boolean);
 }
 
-function prettyContractReadError(e: unknown): string {
+function sanitizeError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   const low = msg.toLowerCase();
+  if (low.includes("user rejected") || low.includes("action_rejected")) return "Transaction rejected.";
+  if (low.includes("insufficient funds")) return "Insufficient funds for gas.";
   if (low.includes("-32002") || low.includes("too many errors")) {
     return "RPC endpoint is temporarily rate-limited. Ensure MetaMask RPC is http://127.0.0.1:8545, switch network away and back, wait 30s, then retry Load.";
   }
   if (low.includes("missing revert data") || low.includes("call_exception")) {
     return "Could not read this contract. Check that the address is deployed on the selected chain and matches ContestJudging.";
   }
-  return msg;
+  const revertMatch = msg.match(/reason="([^"]+)"/) ?? msg.match(/reverted with reason string '([^']+)'/);
+  if (revertMatch) return `Reverted: ${revertMatch[1]}`;
+  if (low.includes("execution reverted")) return "Transaction reverted by contract.";
+  return msg.split("\n")[0].slice(0, 200);
 }
 
 function explorerTxUrl(chainId: number, txHash: string): string | null {
@@ -385,7 +390,7 @@ export default function App() {
         setAuditLog([]);
       }
     } catch (e) {
-      setErr(prettyContractReadError(e));
+      setErr(sanitizeError(e));
     }
   }, [readProvider, activeContract, chainOk, account, chainId]);
 
@@ -423,7 +428,7 @@ export default function App() {
       await tx.wait();
       await refresh();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(sanitizeError(e));
     } finally {
       setBusy(false);
     }
@@ -454,7 +459,7 @@ export default function App() {
       }));
       setBreakdownRows(rows);
     } catch (e) {
-      setErr(prettyContractReadError(e));
+      setErr(sanitizeError(e));
     }
   };
 
