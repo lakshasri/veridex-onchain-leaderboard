@@ -164,14 +164,24 @@ export default function App() {
     setChainId(Number(net.chainId));
   };
 
+  const disconnectWallet = () => {
+    setAccount(null);
+    setChainId(null);
+  };
+
   useEffect(() => {
     if (!window.ethereum) return;
     const eth = window.ethereum;
     const onAccounts = (accs: unknown) => {
-      const a = accs as string[];
-      setAccount(a[0] ?? null);
+      if (!Array.isArray(accs)) return;
+      const first = accs[0];
+      setAccount(typeof first === "string" ? first : null);
     };
-    const onChain = (cid: unknown) => setChainId(Number(cid as string));
+    const onChain = (cid: unknown) => {
+      if (typeof cid !== "string" && typeof cid !== "number") return;
+      const parsed = Number(cid);
+      if (Number.isFinite(parsed)) setChainId(parsed);
+    };
     eth.on("accountsChanged", onAccounts);
     eth.on("chainChanged", onChain);
 
@@ -491,9 +501,18 @@ export default function App() {
             <span className="status-pill status-pill--live">Live contest</span>
           )}
           {account && <span className="role-chip">{roleLabel}</span>}
-          <button type="button" className="btn btn--primary" onClick={() => void connectWallet()} disabled={busy}>
-            {account ? shortAddr(account) : "Connect wallet"}
-          </button>
+          {account ? (
+            <>
+              <span className="wallet-address">{shortAddr(account)}</span>
+              <button type="button" className="btn btn--ghost" onClick={disconnectWallet} disabled={busy}>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn--primary" onClick={() => void connectWallet()} disabled={busy}>
+              Connect wallet
+            </button>
+          )}
         </div>
       </header>
 
