@@ -49,22 +49,21 @@ describe("ContestJudging: deep feature + stress coverage", function () {
 
     await expect(c.registerParticipant(hre.ethers.ZeroAddress)).to.be.revertedWithCustomError(c, "ZeroAddress");
     await c.registerParticipant(participant.address);
-    await expect(c.registerParticipant(participant.address)).to.be.revertedWithCustomError(c, "InvalidScore");
+    await expect(c.registerParticipant(participant.address)).to.be.revertedWithCustomError(c, "AlreadyRegistered");
 
     await expect(c.registerJudge(hre.ethers.ZeroAddress)).to.be.revertedWithCustomError(c, "ZeroAddress");
     await c.registerJudge(judgeA.address);
-    await expect(c.registerJudge(judgeA.address)).to.be.revertedWithCustomError(c, "InvalidScore");
+    await expect(c.registerJudge(judgeA.address)).to.be.revertedWithCustomError(c, "AlreadyRegistered");
 
     await expect(c.getParticipant(7)).to.be.reverted;
     await expect(c.getJudge(7)).to.be.reverted;
   });
 
-  it("keeps assignment/progress counters correct when assignment edges change", async function () {
+  it("keeps assignment/progress counters correct when unscored assignment is removed and re-added", async function () {
     const { c, signers } = await deployFixture();
     const [judgeA, judgeB, p1, p2] = signers;
 
     await registerAll(c, [judgeA, judgeB], [p1, p2]);
-
     await c.setAssignment(judgeA.address, p1.address, true);
     await c.setAssignment(judgeA.address, p2.address, true);
     await c.setAssignment(judgeB.address, p1.address, true);
@@ -73,36 +72,38 @@ describe("ContestJudging: deep feature + stress coverage", function () {
     expect(done).to.equal(0n);
     expect(total).to.equal(3n);
 
-    await c.connect(judgeA).submitScore(p1.address, 8, 7, 9);
-    [done, total] = await c.globalEvaluationProgress();
-    expect(done).to.equal(1n);
-    expect(total).to.equal(3n);
-
-    let [judgeDone, judgeTotal] = await c.judgeEvaluationProgress(judgeA.address);
-    expect(judgeDone).to.equal(1n);
-    expect(judgeTotal).to.equal(2n);
-
-    await c.setAssignment(judgeA.address, p1.address, false);
+    // remove unscored assignment and verify counter decrements
+    await c.setAssignment(judgeA.address, p2.address, false);
     [done, total] = await c.globalEvaluationProgress();
     expect(done).to.equal(0n);
     expect(total).to.equal(2n);
 
-    [judgeDone, judgeTotal] = await c.judgeEvaluationProgress(judgeA.address);
+    let [judgeDone, judgeTotal] = await c.judgeEvaluationProgress(judgeA.address);
     expect(judgeDone).to.equal(0n);
     expect(judgeTotal).to.equal(1n);
 
-    await c.setAssignment(judgeA.address, p1.address, true);
+    // re-add and verify counter recovers
+    await c.setAssignment(judgeA.address, p2.address, true);
     [done, total] = await c.globalEvaluationProgress();
-    expect(done).to.equal(1n);
+    expect(done).to.equal(0n);
     expect(total).to.equal(3n);
 
-    [judgeDone, judgeTotal] = await c.judgeEvaluationProgress(judgeA.address);
-    expect(judgeDone).to.equal(1n);
-    expect(judgeTotal).to.equal(2n);
-
+    await c.connect(judgeA).submitScore(p1.address, 8, 7, 9);
     await c.connect(judgeA).submitScore(p2.address, 5, 5, 5);
     await c.connect(judgeB).submitScore(p1.address, 9, 9, 9);
     expect(await c.canFinalize()).to.equal(true);
+  });
+
+  it("blocks removing an assignment after the score is already submitted", async function () {
+    const { c, signers } = await deployFixture();
+    const [judgeA, p1] = signers;
+
+    await registerAll(c, [judgeA], [p1]);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await c.connect(judgeA).submitScore(p1.address, 8, 7, 9);
+
+    await expect(c.setAssignment(judgeA.address, p1.address, false))
+      .to.be.revertedWithCustomError(c, "AlreadySubmitted");
   });
 
   it("matches weighted score math exactly", async function () {
@@ -125,7 +126,7 @@ describe("ContestJudging: deep feature + stress coverage", function () {
     await c.connect(judgeA).submitScore(p2.address, 5, 5, 5);
     await c.connect(judgeB).submitScore(p1.address, 8, 8, 8);
 
-    const breakdown = await c.participantBreakdown(p1.address);
+    const breakdown = await c.participantBreakdown(p1.address, 0, 500);
     expect(breakdown[0]).to.deep.equal([judgeA.address, judgeB.address]);
     expect(breakdown[1]).to.deep.equal([true, true]);
     expect(breakdown[2]).to.deep.equal([10n, 8n]);
@@ -146,7 +147,7 @@ describe("ContestJudging: deep feature + stress coverage", function () {
     expect(evalP2).to.equal(1n);
     expect(aggP2).to.equal(wP2);
 
-    const [participantsOut, aggsOut, evalCountsOut] = await c.leaderboardData();
+    const [participantsOut, aggsOut, evalCountsOut] = await c.leaderboardData(0, 500);
     expect(participantsOut).to.deep.equal([p1.address, p2.address]);
     expect(aggsOut).to.deep.equal([aggP1, aggP2]);
     expect(evalCountsOut).to.deep.equal([2n, 1n]);
@@ -191,7 +192,7 @@ describe("ContestJudging: deep feature + stress coverage", function () {
     expect(agg).to.be.gt(0n);
     expect(evalCount).to.equal(BigInt(judges.length));
 
-    const breakdown = await c.participantBreakdown(participants[0].address);
+    const breakdown = await c.participantBreakdown(participants[0].address, 0, 500);
     expect(breakdown[0].length).to.equal(judges.length);
     expect(breakdown[1].every(Boolean)).to.equal(true);
 
@@ -231,5 +232,37 @@ describe("ContestJudging: deep feature + stress coverage", function () {
     const [done, total] = await c.judgeEvaluationProgress(outsider.address);
     expect(done).to.equal(0n);
     expect(total).to.equal(0n);
+  });
+
+  it("accepts and correctly aggregates all-zero scores", async function () {
+    const { c, signers } = await deployFixture();
+    const [judgeA, p1] = signers;
+    await registerAll(c, [judgeA], [p1]);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await c.connect(judgeA).submitScore(p1.address, 0, 0, 0);
+    const [agg, evalCount] = await c.participantAggregate(p1.address);
+    expect(evalCount).to.equal(1n);
+    expect(agg).to.equal(0n);
+    expect(await c.canFinalize()).to.equal(true);
+  });
+
+  it("transfers organizer via two-step propose and accept", async function () {
+    const { c, organizer, signers } = await deployFixture();
+    const [newOwner, outsider] = signers;
+
+    await expect(c.proposeOrganizer(hre.ethers.ZeroAddress)).to.be.revertedWithCustomError(c, "ZeroAddress");
+    await expect(c.connect(outsider).proposeOrganizer(newOwner.address)).to.be.revertedWithCustomError(c, "NotOrganizer");
+
+    await c.proposeOrganizer(newOwner.address);
+    expect(await c.pendingOrganizer()).to.equal(newOwner.address);
+
+    await expect(c.connect(outsider).acceptOrganizer()).to.be.revertedWithCustomError(c, "NotPendingOrganizer");
+
+    await c.connect(newOwner).acceptOrganizer();
+    expect(await c.organizer()).to.equal(newOwner.address);
+    expect(await c.pendingOrganizer()).to.equal(hre.ethers.ZeroAddress);
+
+    // old organizer can no longer act
+    await expect(c.connect(organizer).registerParticipant(outsider.address)).to.be.revertedWithCustomError(c, "NotOrganizer");
   });
 });
