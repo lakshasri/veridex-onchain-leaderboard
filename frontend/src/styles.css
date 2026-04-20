@@ -208,6 +208,14 @@ a {
   color: var(--muted);
 }
 
+.wallet-address {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-soft);
+  padding: 6px 10px;
+  border: 1px solid var(--line-soft);
+}
+
 /* ---------- Buttons ---------- */
 .btn {
   background: var(--bg);
