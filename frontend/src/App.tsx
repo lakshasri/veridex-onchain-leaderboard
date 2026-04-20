@@ -505,7 +505,11 @@ export default function App() {
           ) : (
             <span className="status-pill status-pill--live">Live contest</span>
           )}
-          {account && <span className="role-chip">{roleLabel}</span>}
+          {account && (
+            <span className="role-chip" title="Role is display-only; all actions are enforced on-chain">
+              {roleLabel}
+            </span>
+          )}
           {account ? (
             <>
               <span className="wallet-address">{shortAddr(account)}</span>
