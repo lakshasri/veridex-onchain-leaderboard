@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrowserProvider, ContractTransactionResponse, EventLog, JsonRpcProvider, isAddress } from "ethers";
-import { contestAt, scaledToPercent100, shortAddr } from "./lib/contest";
+import { contestAt, normalizeAddr, scaledToPercent100, shortAddr } from "./lib/contest";
 
 const LS_KEY = "veridex_contract_address";
-const DEFAULT_CHAIN_IDS = [1337, 31337, 5777];
+const DEFAULT_CHAIN_IDS = [31337, 1337, 5777];
+const AUDIT_BLOCK_SPAN = 8_000;   // ~27h on Ethereum mainnet at ~12s/block
+const REFRESH_INTERVAL_MS = 14_000; // slightly longer than Ethereum's ~12s block time
+const JUDGE_DOTS_MAX = 14;          // max dot indicators in judge-card UI
 
 type Section = "overview" | "leaderboard" | "operate" | "audit";
 
@@ -159,7 +162,7 @@ export default function App() {
   const provider = useMemo(() => {
     if (!window.ethereum) return null;
     return new BrowserProvider(window.ethereum);
-  }, [account]);
+  }, []);
   const readProvider = useMemo(() => new JsonRpcProvider(rpcUrl), [rpcUrl]);
 
   const connectWallet = async () => {
@@ -265,24 +268,23 @@ export default function App() {
         ro.participantCount(),
         ro.judgeCount(),
       ]);
-      const orgLc = String(org).toLowerCase();
-      setOrganizer(orgLc);
+      setOrganizer(normalizeAddr(org));
       setFinalized(Boolean(fin));
       const maxC = Number(mx);
       setMaxCrit(maxC);
-      setWeights({ ps: BigInt(wps.toString()), cq: BigInt(wcq.toString()), ef: BigInt(wef.toString()) });
+      setWeights({ ps: wps as bigint, cq: wcq as bigint, ef: wef as bigint });
 
       const pn = Number(pc);
       const jn = Number(jc);
       const ps: string[] = [];
       const js: string[] = [];
-      for (let i = 0; i < pn; i++) ps.push(String(await ro.getParticipant(i)).toLowerCase());
-      for (let i = 0; i < jn; i++) js.push(String(await ro.getJudge(i)).toLowerCase());
+      for (let i = 0; i < pn; i++) ps.push(normalizeAddr(await ro.getParticipant(i)));
+      for (let i = 0; i < jn; i++) js.push(normalizeAddr(await ro.getJudge(i)));
       setParticipants(ps);
       setJudges(js);
 
       const gp = await ro.globalEvaluationProgress();
-      setGlobalProg({ done: BigInt(gp[0].toString()), total: BigInt(gp[1].toString()) });
+      setGlobalProg({ done: gp[0] as bigint, total: gp[1] as bigint });
 
       const ld = await ro.leaderboardData(0, 500);
       if (!Array.isArray(ld) || ld.length < 3 || !Array.isArray(ld[0]) || !Array.isArray(ld[1]) || !Array.isArray(ld[2])) {
@@ -294,19 +296,19 @@ export default function App() {
 
       const enriched: BoardRow[] = await Promise.all(
         addrs.map(async (a, i) => {
-          const addr = String(a).toLowerCase();
+          const addr = normalizeAddr(a);
           const pa = await ro.participantAggregate(addr);
           const evalCount = Number(pa[1]);
           const sumPs = Number(pa[2]);
           const sumCq = Number(pa[3]);
           const sumEf = Number(pa[4]);
-          const avgPs = evalCount ? sumPs / evalCount / maxC : 0;
-          const avgCq = evalCount ? sumCq / evalCount / maxC : 0;
-          const avgEf = evalCount ? sumEf / evalCount / maxC : 0;
+          const avgPs = evalCount ? sumPs / (evalCount * maxC) : 0;
+          const avgCq = evalCount ? sumCq / (evalCount * maxC) : 0;
+          const avgEf = evalCount ? sumEf / (evalCount * maxC) : 0;
           return {
             addr,
-            agg: BigInt(aggs[i].toString()),
-            evals: BigInt(ecs[i].toString()),
+            agg: aggs[i] as bigint,
+            evals: ecs[i] as bigint,
             rank: 0,
             avgPs,
             avgCq,
@@ -325,8 +327,8 @@ export default function App() {
           const pr = await ro.judgeEvaluationProgress(j);
           return {
             addr: j,
-            done: BigInt(pr[0].toString()),
-            total: BigInt(pr[1].toString()),
+            done: pr[0] as bigint,
+            total: pr[1] as bigint,
           };
         })
       );
@@ -338,7 +340,7 @@ export default function App() {
       const accLc = account?.toLowerCase() ?? null;
       if (accLc) {
         const jp = await ro.judgeEvaluationProgress(accLc);
-        setJudgeProg({ done: BigInt(jp[0].toString()), total: BigInt(jp[1].toString()) });
+        setJudgeProg({ done: jp[0] as bigint, total: jp[1] as bigint });
 
         const pend: string[] = [];
         for (const p of ps) {
@@ -350,9 +352,9 @@ export default function App() {
         }
         setPendingForJudge(pend);
         setScorePart((prev) => {
-          if (pend.length === 0) return prev;
           if (prev && pend.includes(prev)) return prev;
-          return pend[0];
+          if (!prev && pend.length > 0) return pend[0];
+          return prev;
         });
       } else {
         setJudgeProg({ done: 0n, total: 0n });
@@ -361,8 +363,7 @@ export default function App() {
 
       try {
         const latest = await readProvider.getBlockNumber();
-        const span = 8000;
-        const from = latest > span ? latest - span : 0;
+        const from = latest > AUDIT_BLOCK_SPAN ? latest - AUDIT_BLOCK_SPAN : 0;
         const [scoreEvs, finEvs] = await Promise.all([
           ro.queryFilter(ro.filters.ScoreSubmitted(), from, latest),
           ro.queryFilter(ro.filters.Finalized(), from, latest),
@@ -375,8 +376,8 @@ export default function App() {
             kind: "score",
             blockNumber: log.blockNumber,
             txHash: log.transactionHash,
-            judge: String(a.judge).toLowerCase(),
-            participant: String(a.participant).toLowerCase(),
+            judge: normalizeAddr(a.judge),
+            participant: normalizeAddr(a.participant),
             ps: Number(a.problemSolving),
             cq: Number(a.codeQuality),
             ef: Number(a.efficiency),
@@ -389,8 +390,8 @@ export default function App() {
             kind: "finalize",
             blockNumber: log.blockNumber,
             txHash: log.transactionHash,
-            organizer: String(a.organizer).toLowerCase(),
-            timestamp: BigInt(a.timestamp.toString()),
+            organizer: normalizeAddr(a.organizer),
+            timestamp: a.timestamp as bigint,
           });
         }
         items.sort((x, y) => y.blockNumber - x.blockNumber || y.txHash.localeCompare(x.txHash));
@@ -410,7 +411,7 @@ export default function App() {
   useEffect(() => {
     const t = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
-    }, 14000);
+    }, REFRESH_INTERVAL_MS);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -459,12 +460,12 @@ export default function App() {
       const ef = bd[4] as bigint[];
       const ws = bd[5] as bigint[];
       const rows = judgesOut.map((j, i) => ({
-        judge: String(j).toLowerCase(),
+        judge: normalizeAddr(j),
         sub: Boolean(flags[i]),
         ps: Number(ps[i]),
         cq: Number(cq[i]),
         ef: Number(ef[i]),
-        w: BigInt(ws[i].toString()),
+        w: ws[i] as bigint,
       }));
       setBreakdownRows(rows);
     } catch (e) {
@@ -639,7 +640,7 @@ export default function App() {
                   {judgeStats.map((j) => {
                     const pct =
                       j.total === 0n ? 0 : Number((j.done * 10000n) / j.total) / 100;
-                    const nDots = Math.min(Number(j.total), 14);
+                    const nDots = Math.min(Number(j.total), JUDGE_DOTS_MAX);
                     const filled =
                       j.total === 0n ? 0 : Math.round((Number(j.done) / Number(j.total)) * nDots);
                     return (
