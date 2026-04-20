@@ -9,8 +9,6 @@ export function contestAt(address: string, runner: Provider | JsonRpcSigner) {
 
 /** Weighted sheet and aggregates use 1e18 scale; perfect sheet (all max criteria) ≈ 1e18. */
 export function scaledToPercent100(scaled: bigint): string {
-  if (scaled === 0n) return "0.0";
-  // (scaled / 1e18) * 100
   const pct = (scaled * 10000n) / 10n ** 18n;
   const whole = pct / 100n;
   const frac = pct % 100n;
@@ -19,4 +17,9 @@ export function scaledToPercent100(scaled: bigint): string {
 
 export function shortAddr(a: string): string {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+/** Normalise an address from ethers to a consistent lowercase string. */
+export function normalizeAddr(a: unknown): string {
+  return String(a).toLowerCase();
 }
