@@ -30,8 +30,22 @@ contract ContestJudging {
         uint8 efficiency;
     }
 
+    struct ParticipantTotals {
+        uint256 totalWeightedScaled;
+        uint256 evalCount;
+        uint256 sumPs;
+        uint256 sumCq;
+        uint256 sumEf;
+    }
+
     /// @notice judge => participant => score (immutable after first submit)
     mapping(address => mapping(address => ScoreSubmission)) public scores;
+    mapping(address => ParticipantTotals) private _participantTotals;
+
+    uint256 private _totalAssignedSlots;
+    uint256 private _completedAssignedSlots;
+    mapping(address => uint256) private _judgeAssignedSlots;
+    mapping(address => uint256) private _judgeCompletedSlots;
 
     event ParticipantRegistered(address indexed participant);
     event JudgeRegistered(address indexed judge);
@@ -115,6 +129,24 @@ contract ContestJudging {
 
     function setAssignment(address judgeAddr, address participant, bool allowed) external onlyOrganizer whenNotFinalized {
         if (!isJudge[judgeAddr] || !isParticipant[participant]) revert JudgeOrParticipantNotRegistered();
+        bool prev = isAssigned[judgeAddr][participant];
+        if (prev != allowed) {
+            if (allowed) {
+                _totalAssignedSlots++;
+                _judgeAssignedSlots[judgeAddr]++;
+                if (scores[judgeAddr][participant].submitted) {
+                    _completedAssignedSlots++;
+                    _judgeCompletedSlots[judgeAddr]++;
+                }
+            } else {
+                _totalAssignedSlots--;
+                _judgeAssignedSlots[judgeAddr]--;
+                if (scores[judgeAddr][participant].submitted) {
+                    _completedAssignedSlots--;
+                    _judgeCompletedSlots[judgeAddr]--;
+                }
+            }
+        }
         isAssigned[judgeAddr][participant] = allowed;
         emit AssignmentUpdated(judgeAddr, participant, allowed);
     }
@@ -148,23 +180,22 @@ contract ContestJudging {
         });
 
         uint256 w = weightedScoreScaled(problemSolving, codeQuality, efficiency);
+        _completedAssignedSlots++;
+        _judgeCompletedSlots[msg.sender]++;
+
+        ParticipantTotals storage totals = _participantTotals[participant];
+        totals.totalWeightedScaled += w;
+        totals.evalCount++;
+        totals.sumPs += problemSolving;
+        totals.sumCq += codeQuality;
+        totals.sumEf += efficiency;
+
         emit ScoreSubmitted(msg.sender, participant, problemSolving, codeQuality, efficiency, w);
     }
 
     /// @notice True when every registered judge has submitted for every participant they are assigned.
     function canFinalize() public view returns (bool) {
-        uint256 jn = _judges.length;
-        uint256 pn = _participants.length;
-        for (uint256 j = 0; j < jn; j++) {
-            address jAddr = _judges[j];
-            for (uint256 p = 0; p < pn; p++) {
-                address pAddr = _participants[p];
-                if (isAssigned[jAddr][pAddr] && !scores[jAddr][pAddr].submitted) {
-                    return false;
-                }
-            }
-        }
-        return true;
+        return _completedAssignedSlots == _totalAssignedSlots;
     }
 
     function finalize() external onlyOrganizer whenNotFinalized {
@@ -175,31 +206,15 @@ contract ContestJudging {
 
     /// @notice Submissions completed / total assignment slots (judge × participant pairs with assignment true).
     function globalEvaluationProgress() external view returns (uint256 completed, uint256 totalAssignedSlots) {
-        uint256 jn = _judges.length;
-        uint256 pn = _participants.length;
-        for (uint256 j = 0; j < jn; j++) {
-            address jAddr = _judges[j];
-            for (uint256 p = 0; p < pn; p++) {
-                address pAddr = _participants[p];
-                if (isAssigned[jAddr][pAddr]) {
-                    totalAssignedSlots++;
-                    if (scores[jAddr][pAddr].submitted) completed++;
-                }
-            }
-        }
+        completed = _completedAssignedSlots;
+        totalAssignedSlots = _totalAssignedSlots;
     }
 
     /// @notice For one judge: how many assigned evaluations are done vs total assigned to them.
     function judgeEvaluationProgress(address judgeAddr) external view returns (uint256 completed, uint256 assignedToJudge) {
         if (!isJudge[judgeAddr]) return (0, 0);
-        uint256 pn = _participants.length;
-        for (uint256 p = 0; p < pn; p++) {
-            address pAddr = _participants[p];
-            if (isAssigned[judgeAddr][pAddr]) {
-                assignedToJudge++;
-                if (scores[judgeAddr][pAddr].submitted) completed++;
-            }
-        }
+        completed = _judgeCompletedSlots[judgeAddr];
+        assignedToJudge = _judgeAssignedSlots[judgeAddr];
     }
 
     function _participantAggregateInternal(address participant)
@@ -207,30 +222,12 @@ contract ContestJudging {
         view
         returns (uint256 aggregateScaled, uint256 evalCount, uint256 sumPs, uint256 sumCq, uint256 sumEf)
     {
-        uint256 jn = _judges.length;
-        uint256 totalScaled;
-        uint256 count;
-        uint256 sPs;
-        uint256 sCq;
-        uint256 sEf;
-
-        for (uint256 j = 0; j < jn; j++) {
-            address jAddr = _judges[j];
-            ScoreSubmission storage s = scores[jAddr][participant];
-            if (s.submitted) {
-                count++;
-                totalScaled += weightedScoreScaled(s.problemSolving, s.codeQuality, s.efficiency);
-                sPs += s.problemSolving;
-                sCq += s.codeQuality;
-                sEf += s.efficiency;
-            }
-        }
-
-        evalCount = count;
-        sumPs = sPs;
-        sumCq = sCq;
-        sumEf = sEf;
-        aggregateScaled = count == 0 ? 0 : totalScaled / count;
+        ParticipantTotals storage totals = _participantTotals[participant];
+        evalCount = totals.evalCount;
+        sumPs = totals.sumPs;
+        sumCq = totals.sumCq;
+        sumEf = totals.sumEf;
+        aggregateScaled = evalCount == 0 ? 0 : totals.totalWeightedScaled / evalCount;
     }
 
     /// @return aggregateScaled Average of per-judge weighted scores (1e18 scale) across judges who submitted for `participant`.
