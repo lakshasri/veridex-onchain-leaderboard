@@ -1,11 +1,12 @@
 const hre = require("hardhat");
+const { MAX_SCORE_PER_CRITERION, WEIGHT_PS_BPS, WEIGHT_CQ_BPS, WEIGHT_EF_BPS } = require("./contest-config.cjs");
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
-  const max = 10;
-  const wPs = 4000n;
-  const wCq = 3500n;
-  const wEf = 2500n;
+  const max = MAX_SCORE_PER_CRITERION;
+  const wPs = WEIGHT_PS_BPS;
+  const wCq = WEIGHT_CQ_BPS;
+  const wEf = WEIGHT_EF_BPS;
   const Factory = await hre.ethers.getContractFactory("ContestJudging", deployer);
   const c = await Factory.deploy(max, wPs, wCq, wEf);
   await c.waitForDeployment();

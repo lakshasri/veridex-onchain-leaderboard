@@ -1,4 +1,5 @@
 const hre = require("hardhat");
+const { MAX_SCORE_PER_CRITERION, WEIGHT_PS_BPS, WEIGHT_CQ_BPS, WEIGHT_EF_BPS } = require("./contest-config.cjs");
 
 async function main() {
   const network = await hre.ethers.provider.getNetwork();
@@ -10,7 +11,7 @@ async function main() {
   const [organizer, judgeA, judgeB, p1, p2, p3, outsider] = await hre.ethers.getSigners();
 
   const Factory = await hre.ethers.getContractFactory("ContestJudging", organizer);
-  const c = await Factory.deploy(10, 4000n, 3500n, 2500n);
+  const c = await Factory.deploy(MAX_SCORE_PER_CRITERION, WEIGHT_PS_BPS, WEIGHT_CQ_BPS, WEIGHT_EF_BPS);
   await c.waitForDeployment();
   const addr = await c.getAddress();
   console.log("deployed:", addr);
