@@ -237,8 +237,8 @@ contract ContestJudging {
         return _participantAggregateInternal(participant);
     }
 
-    /// @notice Per-judge breakdown for a participant (only judges with a submission appear with nonzero submitted flag).
-    function participantBreakdown(address participant)
+    /// @notice Per-judge breakdown for a participant with pagination over the judge list.
+    function participantBreakdown(address participant, uint256 offset, uint256 limit)
         external
         view
         returns (
@@ -251,16 +251,21 @@ contract ContestJudging {
         )
     {
         if (!isParticipant[participant]) revert NotParticipant();
-        uint256 jn = _judges.length;
-        judgesOut = new address[](jn);
-        submittedFlags = new bool[](jn);
-        psOut = new uint8[](jn);
-        cqOut = new uint8[](jn);
-        efOut = new uint8[](jn);
-        weightedScaledOut = new uint256[](jn);
+        uint256 total = _judges.length;
+        if (offset >= total || limit == 0) {
+            return (new address[](0), new bool[](0), new uint8[](0), new uint8[](0), new uint8[](0), new uint256[](0));
+        }
+        uint256 end = offset + limit > total ? total : offset + limit;
+        uint256 size = end - offset;
+        judgesOut = new address[](size);
+        submittedFlags = new bool[](size);
+        psOut = new uint8[](size);
+        cqOut = new uint8[](size);
+        efOut = new uint8[](size);
+        weightedScaledOut = new uint256[](size);
 
-        for (uint256 j = 0; j < jn; j++) {
-            address jAddr = _judges[j];
+        for (uint256 j = 0; j < size; j++) {
+            address jAddr = _judges[offset + j];
             judgesOut[j] = jAddr;
             ScoreSubmission storage s = scores[jAddr][participant];
             submittedFlags[j] = s.submitted;
@@ -273,18 +278,23 @@ contract ContestJudging {
         }
     }
 
-    /// @notice Leaderboard data (unsorted). Frontend sorts by `aggregateScaled` descending.
-    function leaderboardData()
+    /// @notice Leaderboard data (unsorted) with pagination. Frontend sorts by `aggregateScaled` descending.
+    function leaderboardData(uint256 offset, uint256 limit)
         external
         view
         returns (address[] memory participantsOut, uint256[] memory aggregateScaledOut, uint256[] memory evalCountsOut)
     {
-        uint256 n = _participants.length;
-        participantsOut = new address[](n);
-        aggregateScaledOut = new uint256[](n);
-        evalCountsOut = new uint256[](n);
-        for (uint256 i = 0; i < n; i++) {
-            address p = _participants[i];
+        uint256 total = _participants.length;
+        if (offset >= total || limit == 0) {
+            return (new address[](0), new uint256[](0), new uint256[](0));
+        }
+        uint256 end = offset + limit > total ? total : offset + limit;
+        uint256 size = end - offset;
+        participantsOut = new address[](size);
+        aggregateScaledOut = new uint256[](size);
+        evalCountsOut = new uint256[](size);
+        for (uint256 i = 0; i < size; i++) {
+            address p = _participants[offset + i];
             participantsOut[i] = p;
             (uint256 agg, uint256 ec,,,) = _participantAggregateInternal(p);
             aggregateScaledOut[i] = agg;
