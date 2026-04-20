@@ -112,8 +112,14 @@ export default function App() {
   const chainIds = useMemo(parseChainIds, []);
   const rpcUrl = import.meta.env.VITE_RPC_URL || "http://127.0.0.1:8545";
   const [section, setSection] = useState<Section>("overview");
-  const [contractAddrInput, setContractAddrInput] = useState(() => localStorage.getItem(LS_KEY) || "");
-  const [activeContract, setActiveContract] = useState(() => localStorage.getItem(LS_KEY) || "");
+  const [contractAddrInput, setContractAddrInput] = useState(() => {
+    const stored = localStorage.getItem(LS_KEY) || "";
+    return isAddress(stored) ? stored : "";
+  });
+  const [activeContract, setActiveContract] = useState(() => {
+    const stored = localStorage.getItem(LS_KEY) || "";
+    return isAddress(stored) ? stored : "";
+  });
   const [account, setAccount] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
