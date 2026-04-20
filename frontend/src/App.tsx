@@ -548,6 +548,11 @@ export default function App() {
           MetaMask or set <span className="mono">VITE_CHAIN_IDS</span> in <span className="mono">frontend/.env</span>.
         </div>
       )}
+      {rpcUrl.startsWith("http://") && !rpcUrl.includes("127.0.0.1") && !rpcUrl.includes("localhost") && (
+        <div className="network-banner">
+          RPC URL is using unencrypted HTTP on a non-local host. Set <span className="mono">VITE_RPC_URL</span> to an HTTPS endpoint.
+        </div>
+      )}
 
       <div className="glass">
         <h3 className="section-title">
