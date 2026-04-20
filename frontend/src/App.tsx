@@ -279,6 +279,9 @@ export default function App() {
       setGlobalProg({ done: BigInt(gp[0].toString()), total: BigInt(gp[1].toString()) });
 
       const ld = await ro.leaderboardData();
+      if (!Array.isArray(ld) || ld.length < 3 || !Array.isArray(ld[0]) || !Array.isArray(ld[1]) || !Array.isArray(ld[2])) {
+        throw new Error("Unexpected leaderboard data shape from contract.");
+      }
       const addrs = ld[0] as string[];
       const aggs = ld[1] as bigint[];
       const ecs = ld[2] as bigint[];
