@@ -131,20 +131,13 @@ contract ContestJudging {
         if (!isJudge[judgeAddr] || !isParticipant[participant]) revert JudgeOrParticipantNotRegistered();
         bool prev = isAssigned[judgeAddr][participant];
         if (prev != allowed) {
+            if (!allowed && scores[judgeAddr][participant].submitted) revert AlreadySubmitted();
             if (allowed) {
                 _totalAssignedSlots++;
                 _judgeAssignedSlots[judgeAddr]++;
-                if (scores[judgeAddr][participant].submitted) {
-                    _completedAssignedSlots++;
-                    _judgeCompletedSlots[judgeAddr]++;
-                }
             } else {
                 _totalAssignedSlots--;
                 _judgeAssignedSlots[judgeAddr]--;
-                if (scores[judgeAddr][participant].submitted) {
-                    _completedAssignedSlots--;
-                    _judgeCompletedSlots[judgeAddr]--;
-                }
             }
         }
         isAssigned[judgeAddr][participant] = allowed;
