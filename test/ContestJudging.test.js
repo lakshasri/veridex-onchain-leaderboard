@@ -158,4 +158,48 @@ describe("ContestJudging", function () {
     expect(count).to.equal(2n);
     expect(agg).to.equal(10n ** 18n);
   });
+
+  it("lets organizer correct a submitted score and updates aggregates", async function () {
+    const { c, judgeA, p1 } = await deployFixture();
+    await c.registerParticipant(p1.address);
+    await c.registerJudge(judgeA.address);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await c.connect(judgeA).submitScore(p1.address, 10, 10, 10);
+    await expect(c.correctScore(judgeA.address, p1.address, 5, 5, 5))
+      .to.emit(c, "OrganizerScoreCorrected")
+      .withArgs(judgeA.address, p1.address, 5, 5, 5, await c.weightedScoreScaled(5, 5, 5));
+    const [agg, count] = await c.participantAggregate(p1.address);
+    expect(count).to.equal(1n);
+    expect(agg).to.equal(await c.weightedScoreScaled(5, 5, 5));
+  });
+
+  it("rejects organizer correct when nothing submitted yet", async function () {
+    const { c, judgeA, p1 } = await deployFixture();
+    await c.registerParticipant(p1.address);
+    await c.registerJudge(judgeA.address);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await expect(c.correctScore(judgeA.address, p1.address, 5, 5, 5)).to.be.revertedWithCustomError(c, "NoSubmissionToCorrect");
+  });
+
+  it("rejects non-organizer correctScore", async function () {
+    const { c, judgeA, p1 } = await deployFixture();
+    await c.registerParticipant(p1.address);
+    await c.registerJudge(judgeA.address);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await c.connect(judgeA).submitScore(p1.address, 5, 5, 5);
+    await expect(c.connect(judgeA).correctScore(judgeA.address, p1.address, 9, 9, 9)).to.be.revertedWithCustomError(
+      c,
+      "NotOrganizer"
+    );
+  });
+
+  it("rejects correctScore after finalize", async function () {
+    const { c, judgeA, p1 } = await deployFixture();
+    await c.registerParticipant(p1.address);
+    await c.registerJudge(judgeA.address);
+    await c.setAssignment(judgeA.address, p1.address, true);
+    await c.connect(judgeA).submitScore(p1.address, 5, 5, 5);
+    await c.finalize();
+    await expect(c.correctScore(judgeA.address, p1.address, 9, 9, 9)).to.be.revertedWithCustomError(c, "AlreadyFinalized");
+  });
 });

@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title On-Chain Contest Judging & Leaderboard
-/// @notice Transparent judging: assignments enforced, immutable submissions, organizer finalization locks state.
 contract ContestJudging {
     address public organizer;
     address public pendingOrganizer;
     bool public finalized;
 
-    /// @dev Maximum raw points per criterion (inclusive).
     uint8 public immutable maxPerCriterion;
 
-    /// @dev Weights in basis points (sum should equal 10000 for a 0–100 normalized aggregate).
     uint256 public immutable weightProblemSolvingBps;
     uint256 public immutable weightCodeQualityBps;
     uint256 public immutable weightEfficiencyBps;
@@ -21,7 +17,6 @@ contract ContestJudging {
 
     mapping(address => bool) public isParticipant;
     mapping(address => bool) public isJudge;
-    /// @notice judge => participant => assigned to evaluate
     mapping(address => mapping(address => bool)) public isAssigned;
 
     struct ScoreSubmission {
@@ -39,7 +34,6 @@ contract ContestJudging {
         uint256 sumEf;
     }
 
-    /// @notice judge => participant => score (immutable after first submit)
     mapping(address => mapping(address => ScoreSubmission)) public scores;
     mapping(address => ParticipantTotals) private _participantTotals;
 
@@ -61,6 +55,14 @@ contract ContestJudging {
         uint8 efficiency,
         uint256 weightedScoreScaled
     );
+    event OrganizerScoreCorrected(
+        address indexed judge,
+        address indexed participant,
+        uint8 problemSolving,
+        uint8 codeQuality,
+        uint8 efficiency,
+        uint256 weightedScoreScaled
+    );
     event Finalized(address indexed organizer, uint256 timestamp);
 
     error NotOrganizer();
@@ -75,6 +77,7 @@ contract ContestJudging {
     error JudgeOrParticipantNotRegistered();
     error FinalizationIncomplete();
     error ZeroAddress();
+    error NoSubmissionToCorrect();
 
     modifier onlyOrganizer() {
         if (msg.sender != organizer) revert NotOrganizer();
@@ -86,10 +89,6 @@ contract ContestJudging {
         _;
     }
 
-    /// @param maxScorePerCriterion e.g. 10 → each criterion is 0..10
-    /// @param wPsBps weight for problem solving in basis points (e.g. 4000 = 40%)
-    /// @param wCqBps weight for code quality
-    /// @param wEfBps weight for efficiency (should sum to 10000 with the others)
     constructor(uint8 maxScorePerCriterion, uint256 wPsBps, uint256 wCqBps, uint256 wEfBps) {
         organizer = msg.sender;
         if (maxScorePerCriterion == 0) revert InvalidScore();
@@ -162,8 +161,6 @@ contract ContestJudging {
         emit AssignmentUpdated(judgeAddr, participant, allowed);
     }
 
-    /// @notice Weighted aggregate for one judge's sheet, scaled to 1e18 (float-free).
-    /// @dev Max scaled score ≈ 1e18 when all criteria are maxPerCriterion.
     function weightedScoreScaled(uint8 ps, uint8 cq, uint8 ef) public view returns (uint256) {
         if (ps > maxPerCriterion || cq > maxPerCriterion || ef > maxPerCriterion) revert InvalidScore();
         uint256 maxU = uint256(maxPerCriterion);
@@ -204,7 +201,39 @@ contract ContestJudging {
         emit ScoreSubmitted(msg.sender, participant, problemSolving, codeQuality, efficiency, w);
     }
 
-    /// @notice True when every registered judge has submitted for every participant they are assigned.
+    function correctScore(address judgeAddr, address participant, uint8 problemSolving, uint8 codeQuality, uint8 efficiency)
+        external
+        onlyOrganizer
+        whenNotFinalized
+    {
+        if (!isJudge[judgeAddr] || !isParticipant[participant]) revert JudgeOrParticipantNotRegistered();
+        if (!isAssigned[judgeAddr][participant]) revert NotAssigned();
+        ScoreSubmission storage s = scores[judgeAddr][participant];
+        if (!s.submitted) revert NoSubmissionToCorrect();
+        if (problemSolving > maxPerCriterion || codeQuality > maxPerCriterion || efficiency > maxPerCriterion) {
+            revert InvalidScore();
+        }
+
+        uint256 wOld = weightedScoreScaled(s.problemSolving, s.codeQuality, s.efficiency);
+        ParticipantTotals storage totals = _participantTotals[participant];
+        totals.totalWeightedScaled -= wOld;
+        totals.sumPs -= s.problemSolving;
+        totals.sumCq -= s.codeQuality;
+        totals.sumEf -= s.efficiency;
+
+        s.problemSolving = problemSolving;
+        s.codeQuality = codeQuality;
+        s.efficiency = efficiency;
+
+        uint256 wNew = weightedScoreScaled(problemSolving, codeQuality, efficiency);
+        totals.totalWeightedScaled += wNew;
+        totals.sumPs += problemSolving;
+        totals.sumCq += codeQuality;
+        totals.sumEf += efficiency;
+
+        emit OrganizerScoreCorrected(judgeAddr, participant, problemSolving, codeQuality, efficiency, wNew);
+    }
+
     function canFinalize() public view returns (bool) {
         return _completedAssignedSlots == _totalAssignedSlots;
     }
@@ -215,13 +244,11 @@ contract ContestJudging {
         emit Finalized(msg.sender, block.timestamp);
     }
 
-    /// @notice Submissions completed / total assignment slots (judge × participant pairs with assignment true).
     function globalEvaluationProgress() external view returns (uint256 completed, uint256 totalAssignedSlots) {
         completed = _completedAssignedSlots;
         totalAssignedSlots = _totalAssignedSlots;
     }
 
-    /// @notice For one judge: how many assigned evaluations are done vs total assigned to them.
     function judgeEvaluationProgress(address judgeAddr) external view returns (uint256 completed, uint256 assignedToJudge) {
         if (!isJudge[judgeAddr]) return (0, 0);
         completed = _judgeCompletedSlots[judgeAddr];
@@ -241,11 +268,6 @@ contract ContestJudging {
         aggregateScaled = evalCount == 0 ? 0 : totals.totalWeightedScaled / evalCount;
     }
 
-    /// @return aggregateScaled Average of per-judge weighted scores (1e18 scale) across judges who submitted for `participant`.
-    /// @return evalCount Number of judges who submitted for this participant.
-    /// @return sumPs sum of raw problem-solving points from those judges
-    /// @return sumCq sum of code quality
-    /// @return sumEf sum of efficiency
     function participantAggregate(address participant)
         external
         view
@@ -255,7 +277,6 @@ contract ContestJudging {
         return _participantAggregateInternal(participant);
     }
 
-    /// @notice Per-judge breakdown for a participant with pagination over the judge list.
     function participantBreakdown(address participant, uint256 offset, uint256 limit)
         external
         view
@@ -296,7 +317,6 @@ contract ContestJudging {
         }
     }
 
-    /// @notice Leaderboard data (unsorted) with pagination. Frontend sorts by `aggregateScaled` descending.
     function leaderboardData(uint256 offset, uint256 limit)
         external
         view

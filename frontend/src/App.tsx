@@ -38,6 +38,16 @@ type AuditEntry =
       ef: number;
     }
   | {
+      kind: "correct";
+      blockNumber: number;
+      txHash: string;
+      judge: string;
+      participant: string;
+      ps: number;
+      cq: number;
+      ef: number;
+    }
+  | {
       kind: "finalize";
       blockNumber: number;
       txHash: string;
@@ -101,6 +111,18 @@ async function copyText(text: string) {
   }
 }
 
+function parseWalletChainId(cid: unknown): number | null {
+  if (typeof cid === "number" && Number.isFinite(cid)) return cid;
+  if (typeof cid !== "string") return null;
+  const s = cid.trim();
+  if (s.startsWith("0x") || s.startsWith("0X")) {
+    const n = Number.parseInt(s, 16);
+    return Number.isFinite(n) ? n : null;
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 declare global {
   interface Window {
     ethereum?: {
@@ -125,6 +147,7 @@ export default function App() {
   });
   const [account, setAccount] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
+  const [rpcChainId, setRpcChainId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -153,17 +176,83 @@ export default function App() {
   const [sCq, setSCq] = useState(7);
   const [sEf, setSEf] = useState(9);
 
+  const [corrJudge, setCorrJudge] = useState("");
+  const [corrPart, setCorrPart] = useState("");
+  const [cPs, setCPs] = useState(8);
+  const [cCq, setCCq] = useState(7);
+  const [cEf, setCEf] = useState(9);
+
   const [breakdownPart, setBreakdownPart] = useState("");
   const [breakdownRows, setBreakdownRows] = useState<
     { judge: string; sub: boolean; ps: number; cq: number; ef: number; w: bigint }[]
   >([]);
 
-  const chainOk = chainId != null && chainIds.includes(chainId);
-  const provider = useMemo(() => {
-    if (!window.ethereum) return null;
-    return new BrowserProvider(window.ethereum);
+  const rpcOk = rpcChainId != null && chainIds.includes(rpcChainId);
+  const walletRpcMismatch = Boolean(account && chainId != null && rpcChainId != null && chainId !== rpcChainId);
+  const auditChainId = rpcChainId ?? chainId;
+
+  const [provEpoch, setProvEpoch] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.ethereum) {
+      setProvEpoch(1);
+      return;
+    }
+    const id = window.setInterval(() => {
+      if (window.ethereum) {
+        setProvEpoch((n) => n + 1);
+        window.clearInterval(id);
+      }
+    }, 100);
+    const t = window.setTimeout(() => window.clearInterval(id), 5000);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(t);
+    };
   }, []);
+  const provider = useMemo(() => {
+    if (typeof window === "undefined" || !window.ethereum) return null;
+    return new BrowserProvider(window.ethereum);
+  }, [provEpoch]);
   const readProvider = useMemo(() => new JsonRpcProvider(rpcUrl), [rpcUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const net = await readProvider.getNetwork();
+        if (!cancelled) setRpcChainId(Number(net.chainId));
+      } catch {
+        if (!cancelled) setRpcChainId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [readProvider]);
+
+  useEffect(() => {
+    if (!activeContract || !isAddress(activeContract) || !rpcOk) return;
+    if (!corrJudge || !corrPart || !isAddress(corrJudge) || !isAddress(corrPart)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const ro = contestAt(activeContract, readProvider);
+        const sheet = await ro.scores(corrJudge, corrPart);
+        if (cancelled) return;
+        if (Boolean(sheet[0])) {
+          setCPs(Number(sheet[1]));
+          setCCq(Number(sheet[2]));
+          setCEf(Number(sheet[3]));
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [corrJudge, corrPart, activeContract, readProvider, rpcOk]);
 
   const connectWallet = async () => {
     setErr(null);
@@ -178,9 +267,21 @@ export default function App() {
     setChainId(Number(net.chainId));
   };
 
-  const disconnectWallet = () => {
+  const disconnectWallet = async () => {
+    const eth = window.ethereum;
+    if (eth?.request) {
+      try {
+        await eth.request({
+          method: "wallet_revokePermissions",
+          params: [{ eth_accounts: {} }],
+        });
+      } catch {
+        /* wallet may not support revoke; still clear UI */
+      }
+    }
     setAccount(null);
     setChainId(null);
+    setErr(null);
   };
 
   useEffect(() => {
@@ -188,13 +289,16 @@ export default function App() {
     const eth = window.ethereum;
     const onAccounts = (accs: unknown) => {
       if (!Array.isArray(accs)) return;
+      if (accs.length === 0) {
+        setAccount(null);
+        return;
+      }
       const first = accs[0];
       setAccount(typeof first === "string" ? first : null);
     };
     const onChain = (cid: unknown) => {
-      if (typeof cid !== "string" && typeof cid !== "number") return;
-      const parsed = Number(cid);
-      if (Number.isFinite(parsed)) setChainId(parsed);
+      const parsed = parseWalletChainId(cid);
+      if (parsed != null) setChainId(parsed);
     };
     eth.on("accountsChanged", onAccounts);
     eth.on("chainChanged", onChain);
@@ -228,10 +332,12 @@ export default function App() {
     localStorage.setItem(LS_KEY, v);
     setActiveContract(v);
     setErr(null);
+    setBreakdownPart("");
+    setBreakdownRows([]);
   };
 
   const refresh = useCallback(async () => {
-    if (!activeContract || !isAddress(activeContract) || !chainOk) return;
+    if (!activeContract || !isAddress(activeContract) || !rpcOk) return;
     setErr(null);
     try {
       const code = await readProvider.getCode(activeContract);
@@ -250,9 +356,9 @@ export default function App() {
         setAuditLog([]);
         setPendingForJudge([]);
         setBreakdownRows([]);
-        const cid = chainId ?? "unknown";
+        const cid = rpcChainId ?? "unknown";
         setErr(
-          `No contract is deployed at ${activeContract} on chain ID ${cid}. Deploy with npm run deploy:local and load the printed address.`
+          `No contract is deployed at ${activeContract} on chain ID ${cid} (RPC ${rpcUrl}). Deploy with npm run deploy:local and load the printed address.`
         );
         return;
       }
@@ -364,9 +470,10 @@ export default function App() {
       try {
         const latest = await readProvider.getBlockNumber();
         const from = latest > AUDIT_BLOCK_SPAN ? latest - AUDIT_BLOCK_SPAN : 0;
-        const [scoreEvs, finEvs] = await Promise.all([
+        const [scoreEvs, finEvs, corrEvs] = await Promise.all([
           ro.queryFilter(ro.filters.ScoreSubmitted(), from, latest),
           ro.queryFilter(ro.filters.Finalized(), from, latest),
+          ro.queryFilter(ro.filters.OrganizerScoreCorrected(), from, latest),
         ]);
         const items: AuditEntry[] = [];
         for (const log of scoreEvs) {
@@ -374,6 +481,20 @@ export default function App() {
           const a = log.args;
           items.push({
             kind: "score",
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+            judge: normalizeAddr(a.judge),
+            participant: normalizeAddr(a.participant),
+            ps: Number(a.problemSolving),
+            cq: Number(a.codeQuality),
+            ef: Number(a.efficiency),
+          });
+        }
+        for (const log of corrEvs) {
+          if (!(log instanceof EventLog)) continue;
+          const a = log.args;
+          items.push({
+            kind: "correct",
             blockNumber: log.blockNumber,
             txHash: log.transactionHash,
             judge: normalizeAddr(a.judge),
@@ -402,7 +523,7 @@ export default function App() {
     } catch (e) {
       setErr(sanitizeError(e));
     }
-  }, [readProvider, activeContract, chainOk, account, chainId]);
+  }, [readProvider, activeContract, rpcOk, rpcChainId, rpcUrl, account]);
 
   useEffect(() => {
     void refresh();
@@ -430,13 +551,24 @@ export default function App() {
           ? "Participant"
           : "Observer";
 
-  const runTx = async (p: Promise<ContractTransactionResponse>) => {
+  const runTx = async (p: Promise<ContractTransactionResponse>, onSuccess?: () => void) => {
+    if (!provider) {
+      setErr("Connect MetaMask to send transactions.");
+      return;
+    }
+    if (walletRpcMismatch) {
+      setErr(
+        `MetaMask is on chain ID ${chainId}, but this app reads from ${rpcUrl} (chain ID ${rpcChainId}). Switch MetaMask to chain ${rpcChainId}, then retry.`
+      );
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       const tx = await p;
       await tx.wait();
       await refresh();
+      onSuccess?.();
     } catch (e) {
       setErr(sanitizeError(e));
     } finally {
@@ -477,6 +609,13 @@ export default function App() {
     globalProg.total === 0n ? 0 : Number((globalProg.done * 10000n) / globalProg.total) / 100;
   const pctJudge =
     judgeProg.total === 0n ? 0 : Number((judgeProg.done * 10000n) / judgeProg.total) / 100;
+
+  const leaderboardRanked = useMemo(() => {
+    const rows = board.filter((r) => r.evals > 0n);
+    rows.sort((a, b) => (a.agg === b.agg ? 0 : a.agg < b.agg ? 1 : -1));
+    return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+  }, [board]);
+  const leaderboardPendingCount = useMemo(() => board.filter((r) => r.evals === 0n).length, [board]);
 
   const nav = (s: Section) => (
     <button type="button" className={section === s ? "is-active" : ""} onClick={() => setSection(s)}>
@@ -523,12 +662,24 @@ export default function App() {
           {account ? (
             <>
               <span className="wallet-address">{shortAddr(account)}</span>
-              <button type="button" className="btn btn--ghost" onClick={disconnectWallet} disabled={busy}>
-                Sign out
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void disconnectWallet()}
+                disabled={busy}
+                title="Disconnects this site in MetaMask so you can connect again as another account (e.g. Judge A)."
+              >
+                Disconnect wallet
               </button>
             </>
           ) : (
-            <button type="button" className="btn btn--primary" onClick={() => void connectWallet()} disabled={busy}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => void connectWallet()}
+              disabled={busy}
+              title="Choose the active account in MetaMask first if you use several imported keys; then connect."
+            >
               Connect wallet
             </button>
           )}
@@ -543,10 +694,24 @@ export default function App() {
         </p>
       </section>
 
-      {chainId != null && !chainOk && (
+      {rpcChainId != null && !chainIds.includes(rpcChainId) && (
         <div className="network-banner">
-          Chain ID <span className="mono">{chainId}</span> is not allowed ({chainIds.join(", ")}). Add your local network in
-          MetaMask or set <span className="mono">VITE_CHAIN_IDS</span> in <span className="mono">frontend/.env</span>.
+          RPC <span className="mono">{rpcUrl}</span> reports chain ID <span className="mono">{rpcChainId}</span>, which is not
+          in <span className="mono">VITE_CHAIN_IDS</span> ({chainIds.join(", ")}). Update <span className="mono">frontend/.env</span>{" "}
+          or your node configuration.
+        </div>
+      )}
+      {account && chainId != null && !chainIds.includes(chainId) && (
+        <div className="network-banner">
+          MetaMask chain ID <span className="mono">{chainId}</span> is not allowed ({chainIds.join(", ")}). Use a supported
+          network or extend <span className="mono">VITE_CHAIN_IDS</span> in <span className="mono">frontend/.env</span>.
+        </div>
+      )}
+      {walletRpcMismatch && (
+        <div className="network-banner">
+          MetaMask is on chain ID <span className="mono">{chainId}</span>, but reads use <span className="mono">{rpcUrl}</span>{" "}
+          (chain ID <span className="mono">{rpcChainId}</span>). Switch MetaMask to that network before Add, Submit, or
+          Finalize—otherwise transactions target the wrong chain.
         </div>
       )}
       {rpcUrl.startsWith("http://") && !rpcUrl.includes("127.0.0.1") && !rpcUrl.includes("localhost") && (
@@ -557,7 +722,7 @@ export default function App() {
 
       <div className="glass">
         <h3 className="section-title">
-          Contract <span className="tag">Connect</span>
+          Contract <span className="tag">RPC + address</span>
         </h3>
         <div className="input-row">
           <input
@@ -570,7 +735,7 @@ export default function App() {
           <button type="button" className="btn btn--primary" onClick={loadContract} disabled={busy}>
             Load
           </button>
-          <button type="button" className="btn" onClick={() => void refresh()} disabled={busy || !activeContract}>
+          <button type="button" className="btn" onClick={() => void refresh()} disabled={busy || !activeContract || !rpcOk}>
             Sync
           </button>
           {activeContract && (
@@ -588,7 +753,7 @@ export default function App() {
       </div>
 
       <div id="overview" className={section === "overview" ? "" : "section-hidden"}>
-        {activeContract && chainOk && weights && (
+        {activeContract && rpcOk && weights && (
           <>
             <div className="stats-grid">
               <div className="stat-card">
@@ -671,8 +836,8 @@ export default function App() {
 
             {isOrganizer && (
               <div className="glass">
-                <h3 className="section-title">Organizer signal</h3>
-                <p style={{ margin: 0, color: "var(--text-soft)", fontSize: "0.9rem" }}>
+                <h3 className="section-title">Organizer</h3>
+                <p style={{ margin: "0 0 1rem", color: "var(--text-soft)", fontSize: "0.9rem" }}>
                   Finalize unlocks only when <strong style={{ color: "var(--text)" }}>every assigned slot</strong> has a
                   submission. Currently:{" "}
                   <strong style={{ color: canFin ? "var(--mint)" : "var(--coral)" }}>
@@ -680,6 +845,25 @@ export default function App() {
                   </strong>
                   .
                 </p>
+                <div className="input-row" style={{ flexWrap: "wrap", alignItems: "center", gap: "0.65rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={busy || finalized || !canFin || walletRpcMismatch || !provider}
+                    onClick={async () => {
+                      if (!provider) return;
+                      const signer = await provider.getSigner();
+                      void runTx(contestAt(activeContract, signer).finalize());
+                    }}
+                  >
+                    Finalize & lock leaderboard
+                  </button>
+                  {!canFin && !finalized && (
+                    <span style={{ color: "var(--text-soft)", fontSize: "0.85rem" }}>
+                      Same control is under Operate after setup.
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </>
@@ -687,28 +871,28 @@ export default function App() {
       </div>
 
       <div id="leaderboard" className={section === "leaderboard" ? "" : "section-hidden"}>
-        {activeContract && chainOk && (
+        {activeContract && rpcOk && (
           <div className="glass">
             <h3 className="section-title">
               Leaderboard
               {finalized ? (
                 <span className="tag" style={{ background: "var(--mint-dim)", color: "var(--mint)" }}>
-                  Verified lock
+                  Final
                 </span>
               ) : (
-                <span className="tag">Provisional</span>
+                <span className="tag">Live</span>
               )}
             </h3>
             <p style={{ margin: "0 0 1rem", color: "var(--text-soft)", fontSize: "0.88rem" }}>
-              Rankings by weighted aggregate (0–100). Bars show average raw scores across judges for each criterion.
+              Weighted aggregate out of 100. Bars are average raw scores (0–max) across judges who scored this participant.
             </p>
             <div className="leader-grid">
-              {board.map((r) => (
+              {leaderboardRanked.map((r) => (
                 <div key={r.addr} className={`leader-card${r.rank <= 3 ? " leader-card--top" : ""}`}>
                   <div className="rank-badge">{r.rank}</div>
                   <div>
-                    <div className="mono" style={{ fontWeight: 600, marginBottom: "0.35rem" }}>
-                      {r.addr}
+                    <div className="mono" style={{ fontWeight: 600, marginBottom: "0.35rem" }} title={r.addr}>
+                      {shortAddr(r.addr)}
                     </div>
                     <div className="capsule-row">
                       <div className="capsule-label">
@@ -716,42 +900,53 @@ export default function App() {
                         <span>{(r.avgPs * 100).toFixed(0)}%</span>
                       </div>
                       <div className="capsule-track">
-                        <div className="capsule-fill capsule-fill--ps" style={{ width: `${r.avgPs * 100}%` }} />
+                        <div className="capsule-fill capsule-fill--ps" style={{ width: `${Math.min(100, r.avgPs * 100)}%` }} />
                       </div>
                       <div className="capsule-label">
                         <span>Code quality</span>
                         <span>{(r.avgCq * 100).toFixed(0)}%</span>
                       </div>
                       <div className="capsule-track">
-                        <div className="capsule-fill capsule-fill--cq" style={{ width: `${r.avgCq * 100}%` }} />
+                        <div className="capsule-fill capsule-fill--cq" style={{ width: `${Math.min(100, r.avgCq * 100)}%` }} />
                       </div>
                       <div className="capsule-label">
                         <span>Efficiency</span>
                         <span>{(r.avgEf * 100).toFixed(0)}%</span>
                       </div>
                       <div className="capsule-track">
-                        <div className="capsule-fill capsule-fill--ef" style={{ width: `${r.avgEf * 100}%` }} />
+                        <div className="capsule-fill capsule-fill--ef" style={{ width: `${Math.min(100, r.avgEf * 100)}%` }} />
                       </div>
                     </div>
-                    {finalized && r.evals > 0n && <div className="verify-badge">✓ Committed on-chain</div>}
                   </div>
                   <div className="leader-score">
                     <div className="leader-score-num">{scaledToPercent100(r.agg)}</div>
-                    <div className="leader-score-label">Aggregate / 100</div>
+                    <div className="leader-score-label">Out of 100</div>
                     <div className="stat-sub" style={{ marginTop: "0.35rem" }}>
-                      {r.evals.toString()} evaluation{r.evals === 1n ? "" : "s"}
+                      {r.evals.toString()} judge{r.evals === 1n ? "" : "s"}
                     </div>
                   </div>
                 </div>
               ))}
-              {board.length === 0 && <p style={{ color: "var(--text-soft)" }}>No participants yet.</p>}
+              {board.length === 0 && <p style={{ color: "var(--text-soft)", margin: 0 }}>No participants registered.</p>}
+              {board.length > 0 && leaderboardRanked.length === 0 && (
+                <p style={{ color: "var(--text-soft)", margin: 0 }}>No scores yet—leaderboard fills after judge submissions.</p>
+              )}
             </div>
+            {leaderboardPendingCount > 0 && leaderboardRanked.length > 0 && (
+              <p style={{ margin: "0.75rem 0 0", color: "var(--text-soft)", fontSize: "0.85rem" }}>
+                {leaderboardPendingCount} other participant{leaderboardPendingCount === 1 ? "" : "s"} registered with no
+                scores yet.
+              </p>
+            )}
           </div>
         )}
 
-        {activeContract && chainOk && (
+        {activeContract && rpcOk && (
           <div className="glass">
-            <h3 className="section-title">Deep breakdown</h3>
+            <h3 className="section-title">Per-participant judges</h3>
+            <p style={{ margin: "0 0 0.75rem", color: "var(--text-soft)", fontSize: "0.85rem" }}>
+              Paste a participant address to see each judge's sheet and status.
+            </p>
             <div className="input-row">
               <input
                 type="text"
@@ -797,53 +992,106 @@ export default function App() {
       </div>
 
       <div id="operate" className={section === "operate" ? "" : "section-hidden"}>
-        {activeContract && chainOk && isOrganizer && (
-          <div className="glass">
-            <h3 className="section-title">
-              Organizer console <span className="tag">Setup</span>
-            </h3>
-            <div className="form-grid">
-              <div>
-                <span className="field-label">Register participant</span>
-                <div className="input-row">
-                  <input type="text" value={regP} onChange={(e) => setRegP(e.target.value)} placeholder="0x…" />
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    disabled={busy || finalized}
-                    onClick={async () => {
-                      if (!isAddress(regP.trim())) { setErr("Invalid participant address."); return; }
-                      const signer = await provider!.getSigner();
-                      void runTx(contestAt(activeContract, signer).registerParticipant(regP.trim()));
-                    }}
-                  >
-                    Add
-                  </button>
+        {activeContract && rpcOk && isOrganizer && (
+          <>
+            <div className="glass">
+              <h3 className="section-title">
+                Organizer console <span className="tag">Setup</span>
+              </h3>
+              <div className="form-grid">
+                <div>
+                  <span className="field-label">Register participant</span>
+                  <div className="input-row">
+                    <input type="text" value={regP} onChange={(e) => setRegP(e.target.value)} placeholder="0x…" />
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={busy || finalized || walletRpcMismatch || !provider}
+                      onClick={async () => {
+                        if (!isAddress(regP.trim())) { setErr("Invalid participant address."); return; }
+                        if (!provider) return;
+                        const signer = await provider.getSigner();
+                        void runTx(contestAt(activeContract, signer).registerParticipant(regP.trim()), () => setRegP(""));
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <span className="field-label">Register judge</span>
+                  <div className="input-row">
+                    <input type="text" value={regJ} onChange={(e) => setRegJ(e.target.value)} placeholder="0x…" />
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={busy || finalized || walletRpcMismatch || !provider}
+                      onClick={async () => {
+                        if (!isAddress(regJ.trim())) { setErr("Invalid judge address."); return; }
+                        if (!provider) return;
+                        const signer = await provider.getSigner();
+                        void runTx(contestAt(activeContract, signer).registerJudge(regJ.trim()), () => setRegJ(""));
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div>
-                <span className="field-label">Register judge</span>
+              <div style={{ marginTop: "1rem" }}>
+                <span className="field-label">Assignment graph</span>
                 <div className="input-row">
-                  <input type="text" value={regJ} onChange={(e) => setRegJ(e.target.value)} placeholder="0x…" />
+                  <select value={asgJudge} onChange={(e) => setAsgJudge(e.target.value)} style={{ minWidth: "140px" }}>
+                    <option value="">Judge</option>
+                    {judges.map((j) => (
+                      <option key={j} value={j}>
+                        {shortAddr(j)}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={asgPart} onChange={(e) => setAsgPart(e.target.value)} style={{ minWidth: "140px" }}>
+                    <option value="">Participant</option>
+                    {participants.map((p) => (
+                      <option key={p} value={p}>
+                        {shortAddr(p)}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="input-row" style={{ alignItems: "center", gap: "0.35rem" }}>
+                    <input type="checkbox" checked={asgOn} onChange={(e) => setAsgOn(e.target.checked)} />
+                    <span style={{ fontSize: "0.85rem", color: "var(--text-soft)" }}>Assigned</span>
+                  </label>
                   <button
                     type="button"
                     className="btn btn--primary"
-                    disabled={busy || finalized}
+                    disabled={busy || finalized || !asgJudge || !asgPart || walletRpcMismatch || !provider}
                     onClick={async () => {
-                      if (!isAddress(regJ.trim())) { setErr("Invalid judge address."); return; }
-                      const signer = await provider!.getSigner();
-                      void runTx(contestAt(activeContract, signer).registerJudge(regJ.trim()));
+                      if (!provider) return;
+                      const signer = await provider.getSigner();
+                      void runTx(contestAt(activeContract, signer).setAssignment(asgJudge, asgPart, asgOn));
                     }}
                   >
-                    Add
+                    Update edge
                   </button>
                 </div>
               </div>
             </div>
-            <div style={{ marginTop: "1rem" }}>
-              <span className="field-label">Assignment graph</span>
-              <div className="input-row">
-                <select value={asgJudge} onChange={(e) => setAsgJudge(e.target.value)} style={{ minWidth: "140px" }}>
+
+            <div className="glass" style={{ marginTop: "1rem" }}>
+              <h3 className="section-title">
+                Correct a score <span className="tag">Organizer</span>
+              </h3>
+              <p style={{ margin: "0 0 1rem", color: "var(--text-soft)", fontSize: "0.88rem" }}>
+                Before finalize, you may replace an existing judge sheet. Sliders refresh when you pick judge + participant
+                (must already be submitted).
+              </p>
+              <div className="input-row" style={{ marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                <select
+                  value={corrJudge}
+                  onChange={(e) => setCorrJudge(e.target.value)}
+                  style={{ minWidth: "140px" }}
+                  aria-label="Judge to correct"
+                >
                   <option value="">Judge</option>
                   {judges.map((j) => (
                     <option key={j} value={j}>
@@ -851,7 +1099,12 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <select value={asgPart} onChange={(e) => setAsgPart(e.target.value)} style={{ minWidth: "140px" }}>
+                <select
+                  value={corrPart}
+                  onChange={(e) => setCorrPart(e.target.value)}
+                  style={{ minWidth: "140px" }}
+                  aria-label="Participant sheet"
+                >
                   <option value="">Participant</option>
                   {participants.map((p) => (
                     <option key={p} value={p}>
@@ -859,30 +1112,94 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <label className="input-row" style={{ alignItems: "center", gap: "0.35rem" }}>
-                  <input type="checkbox" checked={asgOn} onChange={(e) => setAsgOn(e.target.checked)} />
-                  <span style={{ fontSize: "0.85rem", color: "var(--text-soft)" }}>Assigned</span>
-                </label>
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={busy || finalized || !asgJudge || !asgPart}
-                  onClick={async () => {
-                    const signer = await provider!.getSigner();
-                    void runTx(contestAt(activeContract, signer).setAssignment(asgJudge, asgPart, asgOn));
-                  }}
-                >
-                  Update edge
-                </button>
               </div>
-            </div>
-            <div style={{ marginTop: "1.25rem" }}>
+              <div className="form-grid">
+                <div className="slider-field">
+                  <div className="slider-head">
+                    <span className="field-label" style={{ margin: 0 }}>
+                      Problem solving
+                    </span>
+                    <span className="slider-val">{cPs}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxCrit || 10}
+                    value={cPs}
+                    onChange={(e) => setCPs(Number(e.target.value))}
+                  />
+                </div>
+                <div className="slider-field">
+                  <div className="slider-head">
+                    <span className="field-label" style={{ margin: 0 }}>
+                      Code quality
+                    </span>
+                    <span className="slider-val">{cCq}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxCrit || 10}
+                    value={cCq}
+                    onChange={(e) => setCCq(Number(e.target.value))}
+                  />
+                </div>
+                <div className="slider-field">
+                  <div className="slider-head">
+                    <span className="field-label" style={{ margin: 0 }}>
+                      Efficiency
+                    </span>
+                    <span className="slider-val">{cEf}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxCrit || 10}
+                    value={cEf}
+                    onChange={(e) => setCEf(Number(e.target.value))}
+                  />
+                </div>
+              </div>
               <button
                 type="button"
                 className="btn btn--primary"
-                disabled={busy || finalized || !canFin}
+                style={{ marginTop: "1rem" }}
+                disabled={
+                  busy ||
+                  finalized ||
+                  !corrJudge ||
+                  !corrPart ||
+                  walletRpcMismatch ||
+                  !provider
+                }
                 onClick={async () => {
-                  const signer = await provider!.getSigner();
+                  if (!provider) return;
+                  if (!isAddress(corrJudge) || !isAddress(corrPart)) {
+                    setErr("Pick a judge and participant.");
+                    return;
+                  }
+                  const signer = await provider.getSigner();
+                  void runTx(
+                    contestAt(activeContract, signer).correctScore(corrJudge, corrPart, cPs, cCq, cEf)
+                  );
+                }}
+              >
+                Apply score correction
+              </button>
+            </div>
+
+            <div className="glass" style={{ marginTop: "1rem" }}>
+              <h3 className="section-title">Finalize</h3>
+              <p style={{ margin: "0 0 1rem", color: "var(--text-soft)", fontSize: "0.88rem" }}>
+                Locks all scores and setup permanently on-chain.
+              </p>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={busy || finalized || !canFin || walletRpcMismatch || !provider}
+                onClick={async () => {
+                  if (!provider) return;
+                  const signer = await provider.getSigner();
                   void runTx(contestAt(activeContract, signer).finalize());
                 }}
               >
@@ -894,11 +1211,11 @@ export default function App() {
                 </span>
               )}
             </div>
-          </div>
+          </>
         )}
 
-        {activeContract && chainOk && account && (
-          <div className="glass">
+        {activeContract && rpcOk && account && isJudge && (
+          <div className="glass" style={{ marginTop: "1rem" }}>
             <h3 className="section-title">
               Judge scoring <span className="tag">Immutable</span>
             </h3>
@@ -973,7 +1290,7 @@ export default function App() {
               type="button"
               className="btn btn--primary"
               style={{ marginTop: "1.15rem" }}
-              disabled={busy || finalized || !scorePart}
+              disabled={busy || finalized || !scorePart || walletRpcMismatch || !provider}
               onClick={async () => {
                 if (!provider || !account) return;
                 const signer = await provider.getSigner();
@@ -985,34 +1302,78 @@ export default function App() {
           </div>
         )}
 
-        {activeContract && chainOk && !isOrganizer && !account && (
-          <div className="glass">
-            <p style={{ margin: 0, color: "var(--text-soft)" }}>Connect a wallet to judge or use the organizer account for setup.</p>
+        {activeContract && rpcOk && account && isParticipantWallet && !isOrganizer && !isJudge && (
+          <div className="glass" style={{ marginTop: "1rem" }}>
+            <h3 className="section-title">Participant</h3>
+            <p style={{ margin: "0 0 0.75rem", color: "var(--text-soft)", fontSize: "0.9rem" }}>
+              Leaderboard and audit are public reads from your RPC. Use the tabs above—no transaction needed to view them.
+            </p>
+            <div className="input-row" style={{ gap: "0.5rem" }}>
+              <button type="button" className="btn btn--primary" onClick={() => setSection("leaderboard")}>
+                Open leaderboard
+              </button>
+              <button type="button" className="btn" onClick={() => setSection("audit")}>
+                Open on-chain audit
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeContract && rpcOk && account && !isOrganizer && !isJudge && !isParticipantWallet && (
+          <div className="glass" style={{ marginTop: "1rem" }}>
+            <p style={{ margin: "0 0 0.75rem", color: "var(--text-soft)", fontSize: "0.9rem" }}>
+              You are connected as an observer. Leaderboard and audit are readable without sending transactions.
+            </p>
+            <div className="input-row" style={{ gap: "0.5rem" }}>
+              <button type="button" className="btn" onClick={() => setSection("leaderboard")}>
+                Leaderboard
+              </button>
+              <button type="button" className="btn" onClick={() => setSection("audit")}>
+                On-chain audit
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeContract && rpcOk && !account && (
+          <div className="glass" style={{ marginTop: "1rem" }}>
+            <p style={{ margin: "0 0 0.75rem", color: "var(--text-soft)" }}>
+              Connect a wallet to act as organizer or judge. Anyone can load the contract address and open Leaderboard /
+              Audit as a guest (reads only).
+            </p>
+            <div className="input-row" style={{ gap: "0.5rem" }}>
+              <button type="button" className="btn" onClick={() => setSection("leaderboard")}>
+                Leaderboard
+              </button>
+              <button type="button" className="btn" onClick={() => setSection("audit")}>
+                On-chain audit
+              </button>
+            </div>
           </div>
         )}
       </div>
 
       <div id="audit" className={section === "audit" ? "" : "section-hidden"}>
-        {activeContract && chainOk && (
+        {activeContract && rpcOk && (
           <div className="glass">
             <h3 className="section-title">
               On-chain audit trail <span className="tag">Events</span>
             </h3>
             <p style={{ margin: "0 0 1rem", color: "var(--text-soft)", fontSize: "0.88rem" }}>
-              Recent <span className="mono">ScoreSubmitted</span> and <span className="mono">Finalized</span> logs from the
-              last ~8k blocks—each row is a permanent record you can verify against your RPC or block explorer.
+              Recent <span className="mono">ScoreSubmitted</span>, <span className="mono">OrganizerScoreCorrected</span>,
+              and <span className="mono">Finalized</span> logs from the last ~8k blocks.
             </p>
             <div className="audit-feed">
               {auditLog.length === 0 && <p style={{ color: "var(--text-soft)", margin: 0 }}>No events in range yet.</p>}
-              {auditLog.map((e) => {
-                const ex = chainId != null ? explorerTxUrl(chainId, e.txHash) : null;
+              {auditLog.map((e, i) => {
+                const ex = auditChainId != null ? explorerTxUrl(auditChainId, e.txHash) : null;
                 return (
                   <div
-                    key={`${e.txHash}-${e.kind}`}
+                    key={`${e.txHash}-${e.kind}-${i}`}
                     className={`audit-item${e.kind === "finalize" ? " audit-item--finalize" : ""}`}
                   >
                     <div>
-                      {e.kind === "score" ? (
+                      {e.kind === "score" && (
                         <>
                           <div className="audit-type">Score committed</div>
                           <div className="audit-meta">
@@ -1020,7 +1381,17 @@ export default function App() {
                           </div>
                           <div className="audit-meta">Block {e.blockNumber}</div>
                         </>
-                      ) : (
+                      )}
+                      {e.kind === "correct" && (
+                        <>
+                          <div className="audit-type">Organizer correction</div>
+                          <div className="audit-meta">
+                            Judge {shortAddr(e.judge)} → {shortAddr(e.participant)} · PS {e.ps} · CQ {e.cq} · Eff {e.ef}
+                          </div>
+                          <div className="audit-meta">Block {e.blockNumber}</div>
+                        </>
+                      )}
+                      {e.kind === "finalize" && (
                         <>
                           <div className="audit-type">Finalized</div>
                           <div className="audit-meta">Organizer {shortAddr(e.organizer)}</div>
@@ -1052,14 +1423,19 @@ export default function App() {
           <summary>Demo playbook · six wallets</summary>
           <ul>
             <li>
-              <strong>Organizer</strong>: deploy, register three participants and two judges, assign edges (e.g. J₁→P₁,P₂;
-              J₂→P₂,P₃), finalize after all sheets.
+              <strong>Organizer</strong>: deploy, register participants and judges, assign edges, optionally{" "}
+              <strong>Correct a score</strong> before finalize, then <strong>Finalize</strong> (also on Overview).
             </li>
             <li>
               <strong>Rejections</strong>: wrong assignment, double submit, score &gt; max, early finalize, post-lock
               mutation—each reverts with a named custom error.
             </li>
             <li>Ganache often uses chain IDs 1337 or 5777; Hardhat node uses 31337.</li>
+            <li>
+              <strong>Switch roles</strong>: use the MetaMask account picker to change the active address (no disconnect
+              needed), or click <strong>Disconnect wallet</strong> here, pick Judge A in MetaMask, then{" "}
+              <strong>Connect wallet</strong> again.
+            </li>
           </ul>
         </details>
       </div>
